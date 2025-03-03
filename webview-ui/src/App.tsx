@@ -9,21 +9,23 @@ import ChatView from "./components/chat/ChatView"
 import HistoryView from "./components/history/HistoryView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
 import WelcomeView from "./components/welcome/WelcomeView"
+import MetricsView from "./components/metrics/MetricsView"
 import McpView from "./components/mcp/McpView"
 import PromptsView from "./components/prompts/PromptsView"
 
-type Tab = "settings" | "history" | "mcp" | "prompts" | "chat"
+type Tab = "settings" | "history" | "mcp" | "prompts" | "chat" | "metrics"
 
 const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]>, Tab>> = {
 	chatButtonClicked: "chat",
 	settingsButtonClicked: "settings",
 	promptsButtonClicked: "prompts",
 	mcpButtonClicked: "mcp",
+	metricsButtonClicked: "metrics",
 	historyButtonClicked: "history",
 }
 
 const App = () => {
-	const { didHydrateState, showWelcome, shouldShowAnnouncement } = useExtensionState()
+	const { didHydrateState, showWelcome, shouldShowAnnouncement, usageMetricsEnabled } = useExtensionState()
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 	const [tab, setTab] = useState<Tab>("chat")
 	const settingsRef = useRef<SettingsViewRef>(null)
@@ -41,6 +43,7 @@ const App = () => {
 			const message: ExtensionMessage = e.data
 
 			if (message.type === "action" && message.action) {
+				console.log(`Received action: ${message.action}`)
 				const newTab = tabsByMessageAction[message.action]
 
 				if (newTab) {
@@ -52,6 +55,20 @@ const App = () => {
 	)
 
 	useEvent("message", onMessage)
+
+	// Add an additional message handler for internal webview messaging
+	const handleWindowMessage = useCallback(
+		(e: Event) => {
+			// Cast to MessageEvent and check if it's a message with the right type
+			const messageEvent = e as MessageEvent
+			if (messageEvent.data?.type === "showMetrics" && usageMetricsEnabled !== false) {
+				console.log("Internal navigation to metrics view")
+				switchTab("metrics")
+			}
+		},
+		[switchTab, usageMetricsEnabled],
+	)
+	useEvent("message", handleWindowMessage, window)
 
 	useEffect(() => {
 		if (shouldShowAnnouncement) {
@@ -74,6 +91,7 @@ const App = () => {
 			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
 			{tab === "mcp" && <McpView onDone={() => switchTab("chat")} />}
 			{tab === "prompts" && <PromptsView onDone={() => switchTab("chat")} />}
+			{tab === "metrics" && <MetricsView onClose={() => switchTab("chat")} />}
 			<ChatView
 				isHidden={tab !== "chat"}
 				showAnnouncement={showAnnouncement}

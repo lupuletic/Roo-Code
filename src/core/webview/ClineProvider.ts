@@ -16,6 +16,7 @@ import type { SecretKey, GlobalStateKey } from "../../shared/globalState"
 import { HistoryItem } from "../../shared/HistoryItem"
 import { ApiConfigMeta, ExtensionMessage } from "../../shared/ExtensionMessage"
 import { checkoutDiffPayloadSchema, checkoutRestorePayloadSchema, WebviewMessage } from "../../shared/WebviewMessage"
+import { createEmptyMetrics } from "../../utils/metrics"
 import { Mode, CustomModePrompts, PromptComponent, defaultModeSlug } from "../../shared/modes"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { EXPERIMENT_IDS, experiments as Experiments, experimentDefault, ExperimentId } from "../../shared/experiments"
@@ -88,6 +89,13 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			.catch((error) => {
 				this.outputChannel.appendLine(`Failed to initialize MCP Hub: ${error}`)
 			})
+
+		// Initialize UI context variables - context variables must be set synchronously
+		// during constructor to ensure they're available when the extension activates
+		const metricsEnabled = this.context.globalState.get("usageMetricsEnabled") ?? true
+		vscode.commands.executeCommand("setContext", "rooCodeMetricsEnabled", metricsEnabled).then(() => {
+			this.outputChannel.appendLine(`Initialized metrics context variable: ${metricsEnabled}`)
+		})
 	}
 
 	/*
@@ -265,6 +273,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				() => {
 					if (this.view?.visible) {
 						this.postMessageToWebview({ type: "action", action: "didBecomeVisible" })
+						this.postStateToWebview() // Force refresh state when view becomes visible
 					}
 				},
 				null,
@@ -276,6 +285,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 				() => {
 					if (this.view?.visible) {
 						this.postMessageToWebview({ type: "action", action: "didBecomeVisible" })
+						this.postStateToWebview() // Force refresh state when view becomes visible
 					}
 				},
 				null,
@@ -322,6 +332,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			mode,
 			customInstructions: globalInstructions,
 			experiments,
+			usageMetricsEnabled,
 		} = await this.getState()
 
 		const modePrompt = customModePrompts?.[mode] as PromptComponent
@@ -337,7 +348,9 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			task,
 			images,
 			experiments,
+			enableMetrics: usageMetricsEnabled,
 		})
+		this.log(`Initialized Cline with metricsEnabled=${usageMetricsEnabled}`)
 	}
 
 	public async initClineWithHistoryItem(historyItem: HistoryItem) {
@@ -352,6 +365,7 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			mode,
 			customInstructions: globalInstructions,
 			experiments,
+			usageMetricsEnabled,
 		} = await this.getState()
 
 		const modePrompt = customModePrompts?.[mode] as PromptComponent
@@ -366,7 +380,9 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			fuzzyMatchThreshold,
 			historyItem,
 			experiments,
+			enableMetrics: usageMetricsEnabled,
 		})
+		this.log(`Initialized Cline from history with metricsEnabled=${usageMetricsEnabled}`)
 	}
 
 	public async postMessageToWebview(message: ExtensionMessage) {
@@ -528,6 +544,11 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					case "webviewDidLaunch":
 						// Load custom modes first
 						const customModes = await this.customModesManager.getCustomModes()
+
+						// Make sure usage metrics are up to date
+						this.log(
+							`Initializing metrics state in webviewDidLaunch: ${JSON.stringify(await this.getGlobalState("usageMetrics"))}`,
+						)
 						await this.updateGlobalState("customModes", customModes)
 
 						this.postStateToWebview()
@@ -988,6 +1009,37 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					case "mcpEnabled":
 						const mcpEnabled = message.bool ?? true
 						await this.updateGlobalState("mcpEnabled", mcpEnabled)
+						await this.postStateToWebview()
+						break
+					case "usageMetricsEnabled":
+						const usageMetricsEnabled = message.bool ?? true
+						await this.updateGlobalState("usageMetricsEnabled", usageMetricsEnabled)
+						this.log(`Setting usageMetricsEnabled to ${usageMetricsEnabled}`)
+
+						// Always update VSCode context for button visibility
+						await vscode.commands.executeCommand("setContext", "rooCodeMetricsEnabled", usageMetricsEnabled)
+
+						// Ensure metrics are loaded
+						this.log(
+							`Updated metrics context variable: ${usageMetricsEnabled}. Current metrics: ${JSON.stringify(await this.getGlobalState("usageMetrics"))}`,
+						)
+
+						// Update the metricsEnabled property in the current Cline instance
+						if (this.cline) {
+							this.log(
+								`Updating metricsEnabled in current Cline instance from ${this.cline.metricsEnabled} to ${usageMetricsEnabled}`,
+							)
+							this.cline.metricsEnabled = usageMetricsEnabled
+						}
+						// Force a state update to ensure the webview gets the latest settings
+						await this.postStateToWebview()
+						break
+					case "resetUsageMetrics":
+						const freshMetrics = createEmptyMetrics()
+						// Set lastReset to current timestamp to ensure React detects the change
+						freshMetrics.lastReset = Date.now()
+						this.log(`Resetting usage metrics with timestamp ${freshMetrics.lastReset}`)
+						await this.updateGlobalState("usageMetrics", freshMetrics)
 						await this.postStateToWebview()
 						break
 					case "enableMcpServerCreation":
@@ -2131,6 +2183,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 
 	async getState() {
 		const [
+			usageMetricsEnabled,
+			usageMetrics,
 			storedApiProvider,
 			apiModelId,
 			apiKey,
@@ -2215,6 +2269,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 			modelMaxThinkingTokens,
 			maxOpenTabsContext,
 		] = await Promise.all([
+			this.getGlobalState("usageMetricsEnabled") as Promise<boolean | undefined>,
+			this.getGlobalState("usageMetrics") as Promise<any>,
 			this.getGlobalState("apiProvider") as Promise<ApiProvider | undefined>,
 			this.getGlobalState("apiModelId") as Promise<string | undefined>,
 			this.getSecret("apiKey") as Promise<string | undefined>,
@@ -2416,6 +2472,8 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 					return langMap[vscodeLang] ?? langMap[vscodeLang.split("-")[0]] ?? "English"
 				})(),
 			mcpEnabled: mcpEnabled ?? true,
+			usageMetricsEnabled: usageMetricsEnabled ?? true,
+			usageMetrics: usageMetrics ?? createEmptyMetrics(),
 			enableMcpServerCreation: enableMcpServerCreation ?? true,
 			alwaysApproveResubmit: alwaysApproveResubmit ?? false,
 			requestDelaySeconds: Math.max(5, requestDelaySeconds ?? 10),
@@ -2470,6 +2528,46 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 		return await this.context.secrets.get(key)
 	}
 
+	/**
+	 * Updates usage metrics in global state
+	 * This method is called by Cline's trackMetrics method when metrics tracking is enabled
+	 * @param updatedMetrics The updated metrics object
+	 * @returns The updated metrics object
+	 */
+	public async updateMetrics(updatedMetrics: any): Promise<any> {
+		try {
+			// Create a fresh metrics object by creating a deep copy
+			// This ensures React will detect the change as a new object
+			const metricsToSave = JSON.parse(JSON.stringify(updatedMetrics))
+
+			// Update the timestamp to force React to detect the change
+			metricsToSave.lastReset = metricsToSave.lastReset || Date.now()
+
+			this.log("Updating usage metrics")
+			this.log(`Metrics before update: ${JSON.stringify(await this.getGlobalState("usageMetrics"))}`)
+			this.log(`New metrics to save: ${JSON.stringify(metricsToSave)}`)
+
+			await this.updateGlobalState("usageMetrics", updatedMetrics)
+			this.log(`Metrics after update: ${JSON.stringify(await this.getGlobalState("usageMetrics"))}`)
+
+			// Only update the webview if it's visible to avoid unnecessary updates
+			// Always update the webview to ensure metrics changes are reflected
+			this.log("Updating webview with new metrics")
+			await this.postStateToWebview()
+
+			// Update VSCode context to show/hide metrics button
+			const metricsEnabled = (await this.getGlobalState("usageMetricsEnabled")) ?? true
+			await vscode.commands.executeCommand("setContext", "roo-cline:usageMetricsEnabled", metricsEnabled)
+
+			return metricsToSave
+		} catch (error) {
+			const errorMsg = `Error updating metrics: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`
+			this.log(errorMsg)
+			this.log(errorMsg)
+			return undefined
+		}
+	}
+
 	// dev
 
 	async resetState() {
@@ -2518,6 +2616,25 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 
 	public log(message: string) {
 		this.outputChannel.appendLine(message)
+	}
+
+	/**
+	 * Set context variables for UI visibility
+	 * This method updates VSCode context variables that control UI elements like toolbar buttons
+	 */
+	public async updateUiContextVariables() {
+		try {
+			const metricsEnabled = (await this.getGlobalState("usageMetricsEnabled")) ?? true
+			await vscode.commands.executeCommand("setContext", "rooCodeMetricsEnabled", metricsEnabled)
+			this.log(`Updated metrics context variable in updateUiContextVariables: ${metricsEnabled}`)
+		} catch (error) {
+			this.log(`Error updating UI context variables: ${error instanceof Error ? error.message : String(error)}`)
+		}
+
+		// Log current metrics state to help with debugging
+		this.log(`Current metrics state: ${JSON.stringify(await this.getGlobalState("usageMetrics"))}`)
+
+		return true // Ensure promise resolves
 	}
 
 	// integration tests

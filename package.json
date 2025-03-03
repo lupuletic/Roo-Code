@@ -105,6 +105,11 @@
 				"icon": "$(question)"
 			},
 			{
+				"command": "roo-cline.metricsButtonClicked",
+				"title": "Usage Metrics",
+				"icon": "$(graph)"
+			},
+			{
 				"command": "roo-cline.openInNewTab",
 				"title": "Open In New Tab",
 				"category": "Roo Code"
@@ -234,6 +239,11 @@
 				{
 					"command": "roo-cline.helpButtonClicked",
 					"group": "navigation@7",
+					"when": "view == roo-cline.SidebarProvider"
+				},
+				{
+					"command": "roo-cline.metricsButtonClicked",
+					"group": "navigation@8",
 					"when": "view == roo-cline.SidebarProvider"
 				}
 			]
@@ -365,10 +375,12 @@
 		"@types/diff-match-patch": "^1.0.36",
 		"@types/glob": "^8.1.0",
 		"@types/jest": "^29.5.14",
+		"@types/mocha": "^10.0.10",
 		"@types/node": "20.x",
 		"@types/string-similarity": "^4.0.2",
 		"@typescript-eslint/eslint-plugin": "^7.14.1",
 		"@typescript-eslint/parser": "^7.11.0",
+		"electron": "^34.3.0",
 		"esbuild": "^0.24.0",
 		"eslint": "^8.57.0",
 		"glob": "^11.0.1",

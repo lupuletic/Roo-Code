@@ -8,6 +8,32 @@ import { Mode, CustomModePrompts, ModeConfig } from "./modes"
 import { CustomSupportPrompts } from "./support-prompt"
 import { ExperimentId } from "./experiments"
 
+export interface UsageMetrics {
+	// Code metrics
+	linesOfCodeGenerated: number
+	filesCreated: number
+	filesModified: number
+	languageUsage: Record<string, number> // e.g. {"javascript": 200, "python": 150}
+
+	// Usage metrics
+	tasksCompleted: number
+	commandsExecuted: number
+	apiCallsMade: number
+	browserSessionsLaunched: number
+	activeUsageTimeMs: number
+
+	// Cost metrics
+	totalApiCost: number
+	costByProvider: Record<string, number>
+	costByTask: Record<string, number>
+
+	// Tool usage
+	toolUsage: Record<string, number>
+
+	// Last reset timestamp
+	lastReset: number
+}
+
 export interface LanguageModelChatSelector {
 	vendor?: string
 	family?: string
@@ -49,6 +75,7 @@ export interface ExtensionMessage {
 	action?:
 		| "chatButtonClicked"
 		| "mcpButtonClicked"
+		| "metricsButtonClicked"
 		| "settingsButtonClicked"
 		| "historyButtonClicked"
 		| "promptsButtonClicked"
@@ -129,6 +156,8 @@ export interface ExtensionState {
 	toolRequirements?: Record<string, boolean> // Map of tool names to their requirements (e.g. {"apply_diff": true} if diffEnabled)
 	maxOpenTabsContext: number // Maximum number of VSCode open tabs to include in context (0-500)
 	cwd?: string // Current working directory
+	usageMetricsEnabled?: boolean // Whether usage metrics are enabled
+	usageMetrics?: UsageMetrics // Usage metrics data
 }
 
 export interface ClineMessage {

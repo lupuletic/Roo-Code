@@ -10,6 +10,7 @@ import { Button } from "@/components/ui"
 import { ClineMessage } from "../../../../src/shared/ExtensionMessage"
 import { mentionRegexGlobal } from "../../../../src/shared/context-mentions"
 import { HistoryItem } from "../../../../src/shared/HistoryItem"
+import MetricsIcon from "../metrics/MetricsIcon"
 
 import { useExtensionState } from "../../context/ExtensionStateContext"
 import Thumbnails from "../common/Thumbnails"
@@ -369,9 +370,16 @@ export const highlightMentions = (text?: string, withShadow = true) => {
 
 const TaskActions = ({ item }: { item: HistoryItem | undefined }) => {
 	const [deleteTaskId, setDeleteTaskId] = useState<string | null>(null)
+	const { usageMetricsEnabled } = useExtensionState()
+
+	const handleMetricsClick = () => {
+		// Direct in-webview navigation
+		window.postMessage({ type: "showMetrics" }, "*")
+	}
 
 	return (
 		<div className="flex flex-row gap-1">
+			{usageMetricsEnabled !== false && <MetricsIcon onClick={handleMetricsClick} />}
 			<Button
 				variant="ghost"
 				size="sm"

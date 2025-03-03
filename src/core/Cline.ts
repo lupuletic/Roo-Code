@@ -64,6 +64,15 @@ import { McpHub } from "../services/mcp/McpHub"
 import crypto from "crypto"
 import { insertGroups } from "./diff/insert-groups"
 import { EXPERIMENT_IDS, experiments as Experiments, ExperimentId } from "../shared/experiments"
+import {
+	trackFileCreated,
+	trackFileModified,
+	trackCommandExecuted,
+	trackBrowserSession,
+	trackApiCall,
+	trackTaskCompleted,
+	trackToolUsage,
+} from "../utils/metrics"
 
 const cwd =
 	vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
@@ -80,6 +89,7 @@ export type ClineOptions = {
 	fuzzyMatchThreshold?: number
 	task?: string
 	images?: string[]
+	enableMetrics?: boolean
 	historyItem?: HistoryItem
 	experiments?: Record<string, boolean>
 	startTask?: boolean
@@ -96,6 +106,7 @@ export class Cline {
 	customInstructions?: string
 	diffStrategy?: DiffStrategy
 	diffEnabled: boolean = false
+	metricsEnabled: boolean = false // Default to false and let constructor set based on actual state
 	fuzzyMatchThreshold: number = 1.0
 
 	apiConversationHistory: (Anthropic.MessageParam & { ts?: number })[] = []
@@ -137,6 +148,7 @@ export class Cline {
 		customInstructions,
 		enableDiff,
 		enableCheckpoints,
+		enableMetrics,
 		fuzzyMatchThreshold,
 		task,
 		images,
@@ -158,6 +170,8 @@ export class Cline {
 		this.customInstructions = customInstructions
 		this.diffEnabled = enableDiff ?? false
 		this.fuzzyMatchThreshold = fuzzyMatchThreshold ?? 1.0
+		provider.log(`Setting metricsEnabled to ${enableMetrics ?? false} in Cline constructor`)
+		this.metricsEnabled = enableMetrics ?? false // Changed to false to ensure we only enable when explicitly set
 		this.providerRef = new WeakRef(provider)
 		this.diffViewProvider = new DiffViewProvider(cwd)
 		this.enableCheckpoints = enableCheckpoints ?? false
@@ -232,6 +246,53 @@ export class Cline {
 	async overwriteApiConversationHistory(newHistory: Anthropic.MessageParam[]) {
 		this.apiConversationHistory = newHistory
 		await this.saveApiConversationHistory()
+	}
+
+	/**
+	 * Helper method to track metrics only when enabled
+	 * This method will check if metrics tracking is enabled and update metrics through the provider
+	 */
+	private async trackMetrics<T>(action: (metrics: any) => T): Promise<T | void> {
+		// Skip if metrics are disabled at the class level
+		// Log the current state of the metrics tracking flag
+		this.providerRef.deref()?.log(`Metrics tracking class-level flag: ${this.metricsEnabled}`)
+
+		this.providerRef.deref()?.log("Attempting to track metrics")
+
+		// Get provider instance
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			this.providerRef.deref()?.log("Metrics tracking skipped - provider not available")
+			return
+		}
+
+		// Check if metrics are enabled in settings and update metrics
+		const { usageMetricsEnabled, usageMetrics } = await provider.getState()
+		this.providerRef
+			.deref()
+			?.log(`Metrics state: enabled=${usageMetricsEnabled}, metrics=${usageMetrics ? "exists" : "null"}`)
+
+		// Synchronize the class-level property with the current settings value
+		if (this.metricsEnabled !== usageMetricsEnabled) {
+			this.providerRef
+				.deref()
+				?.log(`Updating class-level metricsEnabled from ${this.metricsEnabled} to ${usageMetricsEnabled}`)
+			this.metricsEnabled = usageMetricsEnabled ?? true
+		}
+
+		if (!usageMetricsEnabled) {
+			this.providerRef.deref()?.log("Metrics tracking skipped - disabled in settings")
+			return
+		}
+		if (usageMetrics) {
+			this.providerRef.deref()?.log("Metrics tracking enabled, updating metrics")
+			const updatedMetrics = action(usageMetrics)
+			this.providerRef.deref()?.log(`Updated metrics: ${JSON.stringify(updatedMetrics)}`)
+			return await provider.updateMetrics(updatedMetrics)
+		} else {
+			this.providerRef.deref()?.log("Metrics tracking skipped - no existing metrics object")
+			return
+		}
 	}
 
 	private async saveApiConversationHistory() {
@@ -1418,6 +1479,9 @@ export class Cline {
 								}
 								this.consecutiveMistakeCount = 0
 
+								// Track file creation metrics
+								await this.trackMetrics((metrics) => trackFileCreated(metrics, relPath, newContent))
+
 								// if isEditingFile false, that means we have the full contents of the file already.
 								// it's important to note how this function works, you can't make the assumption that the block.partial conditional will always be called since it may immediately get complete, non-partial data. So this part of the logic will always be called.
 								// in other words, you must always repeat the block.partial logic here
@@ -1594,6 +1658,9 @@ export class Cline {
 
 								this.consecutiveMistakeCount = 0
 								this.consecutiveMistakeCountForApplyDiff.delete(relPath)
+								// Track file modification metrics
+								await this.trackMetrics((metrics) => trackFileModified(metrics, relPath, diffContent))
+
 								// Show diff view before asking for approval
 								this.diffViewProvider.editType = "modify"
 								await this.diffViewProvider.open(relPath)
@@ -2196,6 +2263,9 @@ export class Cline {
 									await this.browserSession.launchBrowser()
 									browserActionResult = await this.browserSession.navigateToUrl(url)
 								} else {
+									// Track browser session metrics
+									await this.trackMetrics((metrics) => trackBrowserSession(metrics))
+
 									if (action === "click") {
 										if (!coordinate) {
 											this.consecutiveMistakeCount++
@@ -2303,6 +2373,9 @@ export class Cline {
 								if (!didApprove) {
 									break
 								}
+
+								// Track command execution metrics
+								await this.trackMetrics((metrics) => trackCommandExecuted(metrics, command))
 								const [userRejected, result] = await this.executeCommandTool(command)
 								if (userRejected) {
 									this.didRejectTool = true
@@ -2403,6 +2476,9 @@ export class Cline {
 											.filter(Boolean)
 											.join("\n\n") || "(No response)"
 								await this.say("mcp_server_response", toolResultPretty)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, `mcp_${tool_name}`))
 								pushToolResult(formatResponse.toolResult(toolResultPretty))
 								break
 							}
@@ -2465,6 +2541,11 @@ export class Cline {
 										.filter(Boolean)
 										.join("\n\n") || "(Empty response)"
 								await this.say("mcp_server_response", resourceResultPretty)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) =>
+									trackToolUsage(metrics, `mcp_resource_${server_name}`),
+								)
 								pushToolResult(formatResponse.toolResult(resourceResultPretty))
 								break
 							}
@@ -2491,6 +2572,9 @@ export class Cline {
 								}
 								this.consecutiveMistakeCount = 0
 								const { text, images } = await this.ask("followup", question, false)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, "ask_followup_question"))
 								await this.say("user_feedback", text ?? "", images)
 								pushToolResult(formatResponse.toolResult(`<answer>\n${text}\n</answer>`, images))
 								break
@@ -2554,6 +2638,9 @@ export class Cline {
 								if (provider) {
 									await provider.handleModeSwitch(mode_slug)
 								}
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, "switch_mode"))
 								pushToolResult(
 									`Successfully switched from ${getModeBySlug(currentMode)?.name ?? currentMode} mode to ${
 										targetMode.name
@@ -2623,6 +2710,9 @@ export class Cline {
 									pushToolResult(
 										`Successfully created new task in ${targetMode.name} mode with message: ${message}`,
 									)
+
+									// Track task completion metrics
+									await this.trackMetrics((metrics) => trackTaskCompleted(metrics, this.taskId))
 								} else {
 									pushToolResult(
 										formatResponse.toolError("Failed to create new task: provider not available"),
@@ -3053,6 +3143,11 @@ export class Cline {
 			updateApiReqMsg()
 			await this.saveClineMessages()
 			await this.providerRef.deref()?.postStateToWebview()
+
+			// Track API call metrics
+			await this.trackMetrics((metrics) =>
+				trackApiCall(metrics, this.api.getModel().id, totalCost || 0, this.taskId),
+			)
 
 			// now add to apiconversationhistory
 			// need to save assistant responses to file before proceeding to tool use since user can exit at any moment and we wouldn't be able to save the assistant's response

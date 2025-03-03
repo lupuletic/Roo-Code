@@ -94,6 +94,8 @@ export interface WebviewMessage {
 		| "checkpointRestore"
 		| "deleteMcpServer"
 		| "maxOpenTabsContext"
+		| "usageMetricsEnabled"
+		| "resetUsageMetrics"
 	text?: string
 	disabled?: boolean
 	askResponse?: ClineAskResponse

@@ -21,6 +21,8 @@ import { ApiConfiguration } from "../../../../src/shared/api"
 import ExperimentalFeature from "./ExperimentalFeature"
 import ApiConfigManager from "./ApiConfigManager"
 import ApiOptions from "./ApiOptions"
+import { createEmptyMetrics } from "../../../../src/utils/metrics"
+import { UsageMetrics } from "./UsageMetrics"
 
 type SettingsViewProps = {
 	onDone: () => void
@@ -38,6 +40,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 	const [isChangeDetected, setChangeDetected] = useState(false)
 	const prevApiConfigName = useRef(extensionState.currentApiConfigName)
 	const confirmDialogHandler = useRef<() => void>()
+	const prevUsageMetricsEnabled = useRef(extensionState.usageMetricsEnabled)
+	const prevUsageMetricsLastReset = useRef(extensionState.usageMetrics?.lastReset)
 	const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined)
 
 	// TODO: Reduce WebviewMessage/ExtensionState complexity
@@ -65,23 +69,53 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 		soundVolume,
 		terminalOutputLineLimit,
 		writeDelayMs,
+		usageMetricsEnabled,
+		usageMetrics,
 	} = cachedState
+
+	// Track metrics updates for debugging
+	useEffect(() => {
+		console.log("extensionState.usageMetrics update detected", extensionState.usageMetrics)
+	}, [extensionState.usageMetrics])
+
+	useEffect(() => {
+		console.log("extensionState.usageMetricsEnabled update detected", extensionState.usageMetricsEnabled)
+	}, [extensionState.usageMetricsEnabled])
 
 	//Make sure apiConfiguration is initialized and managed by SettingsView
 	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
 
 	useEffect(() => {
-		// Update only when currentApiConfigName is changed.
-		// Expected to be triggered by loadApiConfiguration/upsertApiConfiguration.
-		if (prevApiConfigName.current === currentApiConfigName) {
+		// Update when currentApiConfigName is changed or when metrics changes
+		// This ensures metrics updates are reflected in the UI
+		const apiConfigChanged = prevApiConfigName.current !== currentApiConfigName
+		const metricsEnabledChanged = prevUsageMetricsEnabled.current !== extensionState.usageMetricsEnabled
+		const metricsDataChanged = prevUsageMetricsLastReset.current !== extensionState.usageMetrics?.lastReset
+
+		if (!apiConfigChanged && !metricsEnabledChanged && !metricsDataChanged) {
 			return
 		}
 
+		// Update cached state
 		setCachedState((prevCachedState) => ({ ...prevCachedState, ...extensionState }))
+
 		prevApiConfigName.current = currentApiConfigName
+		prevUsageMetricsEnabled.current = extensionState.usageMetricsEnabled
+		prevUsageMetricsLastReset.current = extensionState.usageMetrics?.lastReset
+
+		if (metricsEnabledChanged || metricsDataChanged) {
+			console.log("Updating cachedState for metrics changes")
+		}
+
 		// console.log("useEffect: currentApiConfigName changed, setChangeDetected -> false")
 		setChangeDetected(false)
-	}, [currentApiConfigName, extensionState, isChangeDetected])
+	}, [
+		currentApiConfigName,
+		extensionState,
+		isChangeDetected,
+		extensionState.usageMetricsEnabled,
+		extensionState.usageMetrics,
+	])
 
 	const setCachedStateField = useCallback(
 		<K extends keyof ExtensionStateContextType>(field: K, value: ExtensionStateContextType[K]) => {
@@ -150,6 +184,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			vscode.postMessage({ type: "screenshotQuality", value: screenshotQuality ?? 75 })
 			vscode.postMessage({ type: "terminalOutputLineLimit", value: terminalOutputLineLimit ?? 500 })
 			vscode.postMessage({ type: "mcpEnabled", bool: mcpEnabled })
+			vscode.postMessage({ type: "usageMetricsEnabled", bool: usageMetricsEnabled })
+			console.log("Saving usageMetricsEnabled:", usageMetricsEnabled)
 			vscode.postMessage({ type: "alwaysApproveResubmit", bool: alwaysApproveResubmit })
 			vscode.postMessage({ type: "requestDelaySeconds", value: requestDelaySeconds })
 			vscode.postMessage({ type: "rateLimitSeconds", value: rateLimitSeconds })
@@ -816,6 +852,16 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 								/>
 							))}
 					</div>
+				</div>
+
+				<div style={{ marginBottom: 40 }}>
+					<h3 style={{ color: "var(--vscode-foreground)", margin: "0 0 15px 0" }}>Usage Metrics</h3>
+					<UsageMetrics
+						usageMetrics={usageMetrics ?? createEmptyMetrics()}
+						usageMetricsEnabled={usageMetricsEnabled ?? true}
+						setUsageMetricsEnabled={(value: boolean) => setCachedStateField("usageMetricsEnabled", value)}
+						resetUsageMetrics={() => vscode.postMessage({ type: "resetUsageMetrics" })}
+					/>
 				</div>
 
 				<div

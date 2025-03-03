@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react"
 import { useEvent } from "react-use"
-import { ApiConfigMeta, ExtensionMessage, ExtensionState } from "../../../src/shared/ExtensionMessage"
+import { ApiConfigMeta, ExtensionMessage, ExtensionState, UsageMetrics } from "../../../src/shared/ExtensionMessage"
 import { ApiConfiguration } from "../../../src/shared/api"
 import { vscode } from "../utils/vscode"
 import { convertTextMateToHljs } from "../utils/textMateToHljs"
@@ -8,6 +8,7 @@ import { findLastIndex } from "../../../src/shared/array"
 import { McpServer } from "../../../src/shared/mcp"
 import { checkExistKey } from "../../../src/shared/checkExistApiConfig"
 import { Mode, CustomModePrompts, defaultModeSlug, defaultPrompts, ModeConfig } from "../../../src/shared/modes"
+import { createEmptyMetrics } from "../../../src/utils/metrics"
 import { CustomSupportPrompts } from "../../../src/shared/support-prompt"
 import { experimentDefault, ExperimentId } from "../../../src/shared/experiments"
 
@@ -65,6 +66,10 @@ export interface ExtensionStateContextType extends ExtensionState {
 	customModes: ModeConfig[]
 	setCustomModes: (value: ModeConfig[]) => void
 	setMaxOpenTabsContext: (value: number) => void
+	usageMetricsEnabled?: boolean
+	setUsageMetricsEnabled: (value: boolean) => void
+	usageMetrics?: UsageMetrics
+	resetUsageMetrics: () => void
 }
 
 export const ExtensionStateContext = createContext<ExtensionStateContextType | undefined>(undefined)
@@ -102,6 +107,8 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		customModes: [],
 		maxOpenTabsContext: 20,
 		cwd: "",
+		usageMetricsEnabled: true,
+		usageMetrics: createEmptyMetrics(),
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -126,6 +133,10 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 					setState((prevState) => ({
 						...prevState,
 						...newState,
+						// Ensure usage metrics are treated as a new object to trigger React updates
+						usageMetrics: newState.usageMetrics
+							? JSON.parse(JSON.stringify(newState.usageMetrics))
+							: prevState.usageMetrics,
 					}))
 					const config = newState.apiConfiguration
 					const hasKey = checkExistKey(config)
@@ -244,6 +255,14 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		setAutoApprovalEnabled: (value) => setState((prevState) => ({ ...prevState, autoApprovalEnabled: value })),
 		setCustomModes: (value) => setState((prevState) => ({ ...prevState, customModes: value })),
 		setMaxOpenTabsContext: (value) => setState((prevState) => ({ ...prevState, maxOpenTabsContext: value })),
+		setUsageMetricsEnabled: (value) => {
+			setState((prevState) => ({ ...prevState, usageMetricsEnabled: value }))
+			vscode.postMessage({ type: "usageMetricsEnabled", bool: value })
+			console.log(`Setting usageMetricsEnabled to ${value} via context`)
+		},
+		resetUsageMetrics: () => {
+			vscode.postMessage({ type: "resetUsageMetrics" })
+		},
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>
