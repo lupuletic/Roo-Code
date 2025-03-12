@@ -94,6 +94,18 @@ export interface WebviewMessage {
 		| "checkpointDiff"
 		| "checkpointRestore"
 		| "maxOpenTabsContext"
+		| "codeIndexerEnabled"
+		| "codeIndexerEmbeddingModel"
+		| "codeIndexerAutoIndexOnWorkspaceOpen"
+		| "codeIndexerWatchForFileChanges"
+		| "codeIndexerExcludePatterns"
+		| "codeIndexerMaxFileSizeBytes"
+		| "triggerCodeIndexing"
+		| "getIndexingStatus"
+		| "clearCodeIndex"
+		| "rebuildCodeIndex"
+		| "pauseCodeIndexing"
+		| "resumeCodeIndexing"
 	text?: string
 	disabled?: boolean
 	askResponse?: ClineAskResponse

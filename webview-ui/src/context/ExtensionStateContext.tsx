@@ -35,6 +35,19 @@ export interface ExtensionStateContextType extends ExtensionState {
 	currentCheckpoint?: string
 	filePaths: string[]
 	openedTabs: Array<{ label: string; isActive: boolean; path?: string }>
+	// Code Indexer settings
+	codeIndexerEnabled?: boolean
+	setCodeIndexerEnabled: (value: boolean) => void
+	codeIndexerEmbeddingModel?: string
+	setCodeIndexerEmbeddingModel: (value: string) => void
+	codeIndexerAutoIndexOnWorkspaceOpen?: boolean
+	setCodeIndexerAutoIndexOnWorkspaceOpen: (value: boolean) => void
+	codeIndexerWatchForFileChanges?: boolean
+	setCodeIndexerWatchForFileChanges: (value: boolean) => void
+	codeIndexerExcludePatterns?: string[]
+	setCodeIndexerExcludePatterns: (value: string[]) => void
+	codeIndexerMaxFileSizeBytes?: number
+	setCodeIndexerMaxFileSizeBytes: (value: number) => void
 	setApiConfiguration: (config: ApiConfiguration) => void
 	setCustomInstructions: (value?: string) => void
 	setAlwaysAllowReadOnly: (value: boolean) => void
@@ -119,6 +132,13 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		autoApprovalEnabled: false,
 		customModes: [],
 		maxOpenTabsContext: 20,
+		// Code Indexer default values
+		codeIndexerEnabled: true,
+		codeIndexerEmbeddingModel: "text-embedding-ada-002",
+		codeIndexerAutoIndexOnWorkspaceOpen: true,
+		codeIndexerWatchForFileChanges: true,
+		codeIndexerExcludePatterns: ["**/node_modules/**", "**/.git/**"],
+		codeIndexerMaxFileSizeBytes: 1000000,
 	})
 
 	const [didHydrateState, setDidHydrateState] = useState(false)
@@ -339,6 +359,18 @@ export const ExtensionStateContextProvider: React.FC<{ children: React.ReactNode
 		handleInputChange,
 		setCustomModes: (value) => setState((prevState) => ({ ...prevState, customModes: value })),
 		setMaxOpenTabsContext: (value) => setState((prevState) => ({ ...prevState, maxOpenTabsContext: value })),
+		// Code Indexer setters
+		setCodeIndexerEnabled: (value) => setState((prevState) => ({ ...prevState, codeIndexerEnabled: value })),
+		setCodeIndexerEmbeddingModel: (value) =>
+			setState((prevState) => ({ ...prevState, codeIndexerEmbeddingModel: value })),
+		setCodeIndexerAutoIndexOnWorkspaceOpen: (value) =>
+			setState((prevState) => ({ ...prevState, codeIndexerAutoIndexOnWorkspaceOpen: value })),
+		setCodeIndexerWatchForFileChanges: (value) =>
+			setState((prevState) => ({ ...prevState, codeIndexerWatchForFileChanges: value })),
+		setCodeIndexerExcludePatterns: (value) =>
+			setState((prevState) => ({ ...prevState, codeIndexerExcludePatterns: value })),
+		setCodeIndexerMaxFileSizeBytes: (value) =>
+			setState((prevState) => ({ ...prevState, codeIndexerMaxFileSizeBytes: value })),
 	}
 
 	return <ExtensionStateContext.Provider value={contextValue}>{children}</ExtensionStateContext.Provider>

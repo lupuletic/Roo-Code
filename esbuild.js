@@ -77,7 +77,11 @@ const extensionConfig = {
 	sourcesContent: false,
 	platform: "node",
 	outfile: "dist/extension.js",
-	external: ["vscode"],
+	external: ["vscode", "@lancedb/lancedb", "@lancedb/lancedb-darwin-arm64"],
+	loader: {
+		".node": "file",
+	},
+	allowOverwrite: true,
 }
 
 async function main() {

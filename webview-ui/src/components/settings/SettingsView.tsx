@@ -7,6 +7,7 @@ import ApiOptions from "./ApiOptions"
 import ExperimentalFeature from "./ExperimentalFeature"
 import { EXPERIMENT_IDS, experimentConfigsMap } from "../../../../src/shared/experiments"
 import ApiConfigManager from "./ApiConfigManager"
+import CodeIndexerSettings from "./CodeIndexerSettings"
 import { Dropdown } from "vscrui"
 import type { DropdownOption } from "vscrui"
 
@@ -65,6 +66,19 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 		setAlwaysAllowModeSwitch,
 		maxOpenTabsContext,
 		setMaxOpenTabsContext,
+		// Code Indexer settings
+		codeIndexerEnabled,
+		setCodeIndexerEnabled,
+		codeIndexerEmbeddingModel,
+		setCodeIndexerEmbeddingModel,
+		codeIndexerAutoIndexOnWorkspaceOpen,
+		setCodeIndexerAutoIndexOnWorkspaceOpen,
+		codeIndexerWatchForFileChanges,
+		setCodeIndexerWatchForFileChanges,
+		codeIndexerExcludePatterns,
+		setCodeIndexerExcludePatterns,
+		codeIndexerMaxFileSizeBytes,
+		setCodeIndexerMaxFileSizeBytes,
 	} = useExtensionState()
 	const [apiErrorMessage, setApiErrorMessage] = useState<string | undefined>(undefined)
 	const [modelIdErrorMessage, setModelIdErrorMessage] = useState<string | undefined>(undefined)
@@ -96,6 +110,16 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 			vscode.postMessage({ type: "alwaysApproveResubmit", bool: alwaysApproveResubmit })
 			vscode.postMessage({ type: "requestDelaySeconds", value: requestDelaySeconds })
 			vscode.postMessage({ type: "rateLimitSeconds", value: rateLimitSeconds })
+			// Code Indexer settings
+			vscode.postMessage({ type: "codeIndexerEnabled", bool: codeIndexerEnabled })
+			vscode.postMessage({ type: "codeIndexerEmbeddingModel", text: codeIndexerEmbeddingModel })
+			vscode.postMessage({
+				type: "codeIndexerAutoIndexOnWorkspaceOpen",
+				bool: codeIndexerAutoIndexOnWorkspaceOpen,
+			})
+			vscode.postMessage({ type: "codeIndexerWatchForFileChanges", bool: codeIndexerWatchForFileChanges })
+			vscode.postMessage({ type: "codeIndexerExcludePatterns", values: codeIndexerExcludePatterns })
+			vscode.postMessage({ type: "codeIndexerMaxFileSizeBytes", value: codeIndexerMaxFileSizeBytes })
 			vscode.postMessage({ type: "maxOpenTabsContext", value: maxOpenTabsContext })
 			vscode.postMessage({ type: "currentApiConfigName", text: currentApiConfigName })
 			vscode.postMessage({
@@ -578,6 +602,23 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 							</div>
 						</div>
 					)}
+				</div>
+
+				<div style={{ marginBottom: 40 }}>
+					<CodeIndexerSettings
+						codeIndexerEnabled={codeIndexerEnabled ?? true}
+						setCodeIndexerEnabled={setCodeIndexerEnabled}
+						embeddingModel={codeIndexerEmbeddingModel ?? "text-embedding-ada-002"}
+						setEmbeddingModel={setCodeIndexerEmbeddingModel}
+						autoIndexOnWorkspaceOpen={codeIndexerAutoIndexOnWorkspaceOpen ?? true}
+						setAutoIndexOnWorkspaceOpen={setCodeIndexerAutoIndexOnWorkspaceOpen}
+						watchForFileChanges={codeIndexerWatchForFileChanges ?? true}
+						setWatchForFileChanges={setCodeIndexerWatchForFileChanges}
+						excludePatterns={codeIndexerExcludePatterns ?? ["**/node_modules/**", "**/.git/**"]}
+						setExcludePatterns={setCodeIndexerExcludePatterns}
+						maxFileSizeBytes={codeIndexerMaxFileSizeBytes ?? 1000000}
+						setMaxFileSizeBytes={setCodeIndexerMaxFileSizeBytes}
+					/>
 				</div>
 
 				<div style={{ marginBottom: 40 }}>

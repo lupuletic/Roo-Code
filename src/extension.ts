@@ -6,6 +6,7 @@ import "./utils/path" // Necessary to have access to String.prototype.toPosix.
 import { CodeActionProvider } from "./core/CodeActionProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { handleUri, registerCommands, registerCodeActions, registerTerminalActions } from "./activate"
+import { registerCodeIndexer } from "./services/code-indexer/register"
 import { McpServerManager } from "./services/mcp/McpServerManager"
 
 /**
@@ -82,6 +83,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	registerCodeActions(context)
 	registerTerminalActions(context)
+
+	// Register code indexer service
+	registerCodeIndexer(context)
 
 	return createClineAPI(outputChannel, sidebarProvider)
 }

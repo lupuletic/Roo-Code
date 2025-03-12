@@ -153,6 +153,36 @@
 				"command": "roo-cline.terminalExplainCommandInCurrentTask",
 				"title": "Roo Code: Explain This Command (Current Task)",
 				"category": "Terminal"
+			},
+			{
+				"command": "cline.startCodeIndexing",
+				"title": "Start Code Indexing",
+				"category": "Roo Code"
+			},
+			{
+				"command": "cline.getIndexingStatus",
+				"title": "Show Code Indexing Status",
+				"category": "Roo Code"
+			},
+			{
+				"command": "cline.rebuildCodeIndex",
+				"title": "Rebuild Code Index",
+				"category": "Roo Code"
+			},
+			{
+				"command": "cline.clearCodeIndex",
+				"title": "Clear Code Index",
+				"category": "Roo Code"
+			},
+			{
+				"command": "cline.pauseCodeIndexing",
+				"title": "Pause Code Indexing",
+				"category": "Roo Code"
+			},
+			{
+				"command": "cline.resumeCodeIndexing",
+				"title": "Resume Code Indexing",
+				"category": "Roo Code"
 			}
 		],
 		"menus": {
@@ -255,6 +285,76 @@
 						"git show"
 					],
 					"description": "Commands that can be auto-executed when 'Always approve execute operations' is enabled"
+				},
+				"cline.codeIndexer.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Whether the code indexer feature is enabled"
+				},
+				"cline.codeIndexer.embeddingModel": {
+					"type": "string",
+					"default": "text-embedding-ada-002",
+					"enum": [
+						"text-embedding-ada-002",
+						"text-embedding-3-small",
+						"text-embedding-3-large"
+					],
+					"description": "OpenAI embedding model to use for code indexing"
+				},
+				"cline.codeIndexer.autoIndexOnWorkspaceOpen": {
+					"type": "boolean",
+					"default": true,
+					"description": "Automatically index the workspace when it's opened"
+				},
+				"cline.codeIndexer.watchForFileChanges": {
+					"type": "boolean",
+					"default": true,
+					"description": "Watch for file changes and update the index accordingly"
+				},
+				"cline.codeIndexer.maxFileSizeBytes": {
+					"type": "number",
+					"default": 1048576,
+					"description": "Maximum file size to index in bytes (default: 1MB)"
+				},
+				"cline.codeIndexer.excludePatterns": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [
+						"**/node_modules/**",
+						"**/dist/**",
+						"**/build/**",
+						"**/.git/**",
+						"**/coverage/**",
+						"**/package-lock.json",
+						"**/yarn.lock",
+						"**/*.log",
+						"**/*.map",
+						"**/*.o",
+						"**/*.obj",
+						"**/*.bin",
+						"**/*.exe",
+						"**/*.dll",
+						"**/*.so",
+						"**/.DS_Store"
+					],
+					"description": "Patterns to exclude from indexing"
+				},
+				"cline.codeIndexer.maxChunkSize": {
+					"type": "number",
+					"default": 1000,
+					"description": "Maximum chunk size in characters"
+				},
+				"cline.codeIndexer.chunkOverlap": {
+					"type": "number",
+					"default": 100,
+					"description": "Overlap between chunks in characters"
+				},
+				"cline.codeIndexer.showNotifications": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show notifications for indexing progress"
 				},
 				"roo-cline.vsCodeLmModelSelector": {
 					"type": "object",

@@ -1,8 +1,10 @@
 import { readFile } from "fs/promises"
 import path from "path"
 
-import { Parser, Language, Node } from "web-tree-sitter"
+import { Parser, Language, Node, Tree } from "web-tree-sitter"
+import { logger } from "../../utils/logging"
 
+import * as fs from "fs/promises"
 import { getUriFileExtension } from "./uri"
 
 export type CodeChunk = {
@@ -12,6 +14,9 @@ export type CodeChunk = {
 	type: string
 	filepath: string
 }
+
+// Maximum size in bytes for a single code chunk
+export const MAX_CHUNK_SIZE = 8192 // 8KB chunk size limit
 
 const supportedTypes = [
 	"function_definition",
@@ -24,39 +29,121 @@ const supportedTypes = [
 	"export_statement",
 ]
 
+/**
+ * Process a single file and extract code chunks
+ * @param filepath Path to the file to chunk
+ * @returns Array of code chunks
+ */
 export async function getChunks(filepath: string): Promise<CodeChunk[]> {
-	const parser = await getParserForFile(filepath)
-	const sourceCode = await readFile(filepath, "utf-8")
-	const tree = parser.parse(sourceCode)
-	const chunks: CodeChunk[] = []
+	try {
+		const parser = await getParserForFile(filepath)
+		const sourceCode = await readFile(filepath, "utf-8")
+		const tree = parser.parse(sourceCode)
+		const chunks: CodeChunk[] = []
 
-	if (!tree) {
-		throw new Error(`Failed to parse file: ${filepath}`)
-	}
-
-	const traverseNode = (node: Node) => {
-		const { type, startIndex, endIndex } = node
-
-		if (supportedTypes.includes(node.type)) {
-			chunks.push({
-				chunk: sourceCode.slice(startIndex, endIndex),
-				start: startIndex,
-				end: endIndex,
-				type,
-				filepath,
-			})
+		if (!tree) {
+			throw new Error(`Failed to parse file: ${filepath}`)
 		}
 
-		for (let child of node.children) {
-			if (child) {
-				traverseNode(child)
+		extractChunksFromTree(tree, sourceCode, filepath, chunks)
+
+		return chunks
+	} catch (error) {
+		logger.error(`Error chunking file ${filepath}:`, error)
+		throw error
+	}
+}
+
+/**
+ * Process multiple files and extract chunks from each
+ * @param filepaths Array of file paths to process
+ * @param onProgress Optional callback for progress reporting
+ * @returns Object containing successful chunks and errors
+ */
+export async function getChunksBatch(
+	filepaths: string[],
+	onProgress?: (processed: number, total: number, file: string) => void,
+): Promise<{
+	chunks: CodeChunk[]
+	errors: Record<string, string>
+}> {
+	const allChunks: CodeChunk[] = []
+	const errors: Record<string, string> = {}
+	let processed = 0
+
+	for (const filepath of filepaths) {
+		try {
+			// Check if file exists and is accessible
+			try {
+				await fs.access(filepath)
+			} catch (error) {
+				throw new Error(`File does not exist or is not accessible: ${filepath}`)
+			}
+
+			const fileChunks = await getChunks(filepath)
+			allChunks.push(...fileChunks)
+
+			if (onProgress) {
+				processed++
+				onProgress(processed, filepaths.length, filepath)
+			}
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error)
+			errors[filepath] = errorMessage
+			logger.error(`Failed to chunk file ${filepath}:`, error)
+
+			if (onProgress) {
+				processed++
+				onProgress(processed, filepaths.length, filepath)
 			}
 		}
 	}
 
-	traverseNode(tree.rootNode)
+	return {
+		chunks: allChunks,
+		errors,
+	}
+}
 
-	return chunks
+/**
+ * Extract chunks from a parsed source tree
+ * @param tree The parsed syntax tree
+ * @param sourceCode Source code string
+ * @param filepath File path for reference
+ * @param chunks Array to populate with chunks
+ */
+function extractChunksFromTree(tree: Tree, sourceCode: string, filepath: string, chunks: CodeChunk[]): void {
+	const traverseNode = (node: Node) => {
+		try {
+			const { type, startIndex, endIndex } = node
+
+			if (supportedTypes.includes(node.type)) {
+				const chunkText = sourceCode.slice(startIndex, endIndex)
+
+				// Skip chunks that exceed the maximum size
+				if (chunkText.length > MAX_CHUNK_SIZE) {
+					logger.warn(`Skipping oversized chunk in ${filepath}: ${type} (${chunkText.length} bytes)`)
+				} else {
+					chunks.push({
+						chunk: chunkText,
+						start: startIndex,
+						end: endIndex,
+						type,
+						filepath,
+					})
+				}
+			}
+
+			for (let child of node.children) {
+				if (child) traverseNode(child)
+			}
+		} catch (error) {
+			// Log error but continue processing other nodes
+			logger.error(`Error processing node in ${filepath}:`, error)
+		}
+	}
+
+	traverseNode(tree.rootNode)
 }
 
 export enum LanguageName {
