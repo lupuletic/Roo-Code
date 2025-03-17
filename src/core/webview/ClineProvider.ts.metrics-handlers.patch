@@ -1,0 +1,20 @@
+case "getCodeMetrics":
+  try {
+    const metricsService = CodeMetricsService.getInstance()
+    const metrics = metricsService.getMetrics()
+    this.view?.webview.postMessage({ type: "codeMetricsData", metrics })
+  } catch (error) {
+    this.outputChannel.appendLine(`Error getting code metrics: ${error}`)
+  }
+  break
+
+case "resetCodeMetrics":
+  try {
+    CodeMetricsService.getInstance().resetMetrics()
+    // Confirm to the user that metrics were reset
+    vscode.window.showInformationMessage("Code metrics have been reset successfully")
+  } catch (error) {
+    this.outputChannel.appendLine(`Error resetting code metrics: ${error}`)
+    vscode.window.showErrorMessage("Failed to reset code metrics")
+  }
+  break

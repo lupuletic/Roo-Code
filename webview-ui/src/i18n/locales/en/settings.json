@@ -25,6 +25,7 @@
 		"notifications": "Notifications",
 		"contextManagement": "Context Management",
 		"advanced": "Advanced",
+		"metrics": "Code Metrics",
 		"experimental": "Experimental Features"
 	},
 	"autoApprove": {

@@ -18,6 +18,7 @@ import { CodeActionProvider } from "./core/CodeActionProvider"
 import { DIFF_VIEW_URI_SCHEME } from "./integrations/editor/DiffViewProvider"
 import { McpServerManager } from "./services/mcp/McpServerManager"
 import { telemetryService } from "./services/telemetry/TelemetryService"
+import { CodeMetricsService } from "./services/metrics/CodeMetricsService"
 import { TerminalRegistry } from "./integrations/terminal/TerminalRegistry"
 import { API } from "./exports/api"
 
@@ -44,6 +45,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Initialize telemetry service after environment variables are loaded.
 	telemetryService.initialize()
+
+	// Initialize code metrics service
+	CodeMetricsService.getInstance(context)
 
 	// Initialize terminal shell execution handlers.
 	TerminalRegistry.initialize()
@@ -115,6 +119,9 @@ export async function deactivate() {
 	// Clean up MCP server manager
 	await McpServerManager.cleanup(extensionContext)
 	telemetryService.shutdown()
+
+	// Clean up code metrics service (dispose event listeners)
+	CodeMetricsService.getInstance().dispose()
 
 	// Clean up terminal handlers
 	TerminalRegistry.cleanup()

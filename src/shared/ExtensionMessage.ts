@@ -53,6 +53,9 @@ export interface ExtensionMessage {
 		| "humanRelayCancel"
 		| "browserToolEnabled"
 		| "browserConnectionResult"
+		| "getCodeMetrics"
+		| "codeMetricsData"
+		| "resetCodeMetrics"
 		| "remoteBrowserEnabled"
 	text?: string
 	action?:
@@ -83,6 +86,7 @@ export interface ExtensionMessage {
 	mcpServers?: McpServer[]
 	commits?: GitCommit[]
 	listApiConfig?: ApiConfigMeta[]
+	metrics?: any // For the metrics data structure
 	mode?: Mode
 	customMode?: ModeConfig
 	slug?: string

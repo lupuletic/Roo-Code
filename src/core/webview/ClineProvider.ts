@@ -23,6 +23,7 @@ import { HistoryItem } from "../../shared/HistoryItem"
 import { ApiConfigMeta, ExtensionMessage } from "../../shared/ExtensionMessage"
 import { checkoutDiffPayloadSchema, checkoutRestorePayloadSchema, WebviewMessage } from "../../shared/WebviewMessage"
 import { Mode, PromptComponent, defaultModeSlug, ModeConfig } from "../../shared/modes"
+import { CodeMetricsService } from "../../services/metrics/CodeMetricsService"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { EXPERIMENT_IDS, experiments as Experiments, experimentDefault, ExperimentId } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
@@ -1854,6 +1855,26 @@ export class ClineProvider implements vscode.WebviewViewProvider {
 								requestId: message.requestId,
 								cancelled: true,
 							})
+						}
+						break
+
+					case "getCodeMetrics":
+						try {
+							const metricsService = CodeMetricsService.getInstance()
+							const metrics = metricsService.getMetrics()
+							this.view?.webview.postMessage({ type: "codeMetricsData", metrics })
+						} catch (error) {
+							this.outputChannel.appendLine(`Error getting code metrics: ${error}`)
+						}
+						break
+
+					case "resetCodeMetrics":
+						try {
+							CodeMetricsService.getInstance().resetMetrics()
+							vscode.window.showInformationMessage("Code metrics have been reset successfully")
+						} catch (error) {
+							this.outputChannel.appendLine(`Error resetting code metrics: ${error}`)
+							vscode.window.showErrorMessage("Failed to reset code metrics")
 						}
 						break
 

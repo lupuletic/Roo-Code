@@ -103,6 +103,8 @@ export interface WebviewMessage {
 		| "browserToolEnabled"
 		| "telemetrySetting"
 		| "showRooIgnoredFiles"
+		| "getCodeMetrics"
+		| "resetCodeMetrics"
 		| "testBrowserConnection"
 		| "discoverBrowser"
 		| "browserConnectionResult"

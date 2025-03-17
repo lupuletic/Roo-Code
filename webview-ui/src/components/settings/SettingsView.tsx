@@ -9,6 +9,7 @@ import {
 	Bell,
 	Cog,
 	FlaskConical,
+	BarChart3,
 	AlertTriangle,
 } from "lucide-react"
 
@@ -45,6 +46,7 @@ import { ContextManagementSettings } from "./ContextManagementSettings"
 import { AdvancedSettings } from "./AdvancedSettings"
 import { SettingsFooter } from "./SettingsFooter"
 import { Section } from "./Section"
+import { MetricsSettings } from "./MetricsSettings"
 import { ExperimentalSettings } from "./ExperimentalSettings"
 
 export interface SettingsViewRef {
@@ -239,6 +241,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 	const contextRef = useRef<HTMLDivElement>(null)
 	const advancedRef = useRef<HTMLDivElement>(null)
 	const experimentalRef = useRef<HTMLDivElement>(null)
+	const metricsRef = useRef<HTMLDivElement>(null)
 
 	const [activeSection, setActiveSection] = useState<string>("providers")
 
@@ -251,6 +254,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			{ id: "notifications", icon: Bell, ref: notificationsRef },
 			{ id: "context", icon: Database, ref: contextRef },
 			{ id: "advanced", icon: Cog, ref: advancedRef },
+			{ id: "metrics", icon: BarChart3, ref: metricsRef },
 			{ id: "experimental", icon: FlaskConical, ref: experimentalRef },
 		],
 		[providersRef, autoApproveRef, browserRef, checkpointRef, notificationsRef, advancedRef, experimentalRef],
@@ -265,6 +269,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			{ ref: notificationsRef, id: "notifications" },
 			{ ref: contextRef, id: "context" },
 			{ ref: advancedRef, id: "advanced" },
+			{ ref: metricsRef, id: "metrics" },
 			{ ref: experimentalRef, id: "experimental" },
 		]
 
@@ -436,6 +441,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 						setExperimentEnabled={setExperimentEnabled}
 						experiments={experiments}
 					/>
+				</div>
+
+				<div ref={metricsRef}>
+					<MetricsSettings setCachedStateField={setCachedStateField} />
 				</div>
 
 				<div ref={experimentalRef}>

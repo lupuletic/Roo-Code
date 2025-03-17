@@ -75,6 +75,7 @@ import { formatLanguage } from "../shared/language"
 import { McpHub } from "../services/mcp/McpHub"
 import { DiffStrategy, getDiffStrategy } from "./diff/DiffStrategy"
 import { insertGroups } from "./diff/insert-groups"
+import { CodeMetricsService } from "../services/metrics/CodeMetricsService"
 import { telemetryService } from "../services/telemetry/TelemetryService"
 import { validateToolUse, isToolAllowedForMode, ToolName } from "./mode-validator"
 
@@ -1680,6 +1681,20 @@ export class Cline extends EventEmitter<ClineEvents> {
 								const { newProblemsMessage, userEdits, finalContent } =
 									await this.diffViewProvider.saveChanges()
 								this.didEditFile = true // used to determine if we should wait for busy terminal to update before sending api request
+
+								// Track metrics for AI code changes
+								try {
+									const metricsService = CodeMetricsService.getInstance()
+									metricsService.trackAIDiffChanges(
+										this.diffViewProvider.originalContent || "",
+										finalContent || "",
+										relPath,
+										this.diffViewProvider.editType === "create",
+									)
+								} catch (error) {
+									/* Silently handle metrics errors */
+								}
+
 								if (userEdits) {
 									await this.say(
 										"user_feedback_diff",
@@ -1845,6 +1860,20 @@ export class Cline extends EventEmitter<ClineEvents> {
 								const { newProblemsMessage, userEdits, finalContent } =
 									await this.diffViewProvider.saveChanges()
 								this.didEditFile = true // used to determine if we should wait for busy terminal to update before sending api request
+
+								// Track metrics for AI code changes
+								try {
+									const metricsService = CodeMetricsService.getInstance()
+									metricsService.trackAIDiffChanges(
+										this.diffViewProvider.originalContent || "",
+										finalContent || "",
+										relPath,
+										false,
+									) // apply_diff is always for existing files
+								} catch (error) {
+									/* Silently handle metrics errors */
+								}
+
 								let partFailHint = ""
 								if (diffResult.failParts && diffResult.failParts.length > 0) {
 									partFailHint = `But unable to apply all diff parts to file: ${absolutePath}, silently use <read_file> tool to check newest file version and re-apply diffs\n`
@@ -1999,6 +2028,19 @@ export class Cline extends EventEmitter<ClineEvents> {
 							const { newProblemsMessage, userEdits, finalContent } =
 								await this.diffViewProvider.saveChanges()
 							this.didEditFile = true
+
+							// Track metrics for AI code changes
+							try {
+								const metricsService = CodeMetricsService.getInstance()
+								metricsService.trackAIDiffChanges(
+									this.diffViewProvider.originalContent || "",
+									finalContent || "",
+									relPath,
+									false,
+								) // insert_content is always for existing files
+							} catch (error) {
+								/* Silently handle metrics errors */
+							}
 
 							if (!userEdits) {
 								pushToolResult(
@@ -2167,6 +2209,20 @@ export class Cline extends EventEmitter<ClineEvents> {
 								const { newProblemsMessage, userEdits, finalContent } =
 									await this.diffViewProvider.saveChanges()
 								this.didEditFile = true // used to determine if we should wait for busy terminal to update before sending api request
+
+								// Track metrics for AI code changes
+								try {
+									const metricsService = CodeMetricsService.getInstance()
+									metricsService.trackAIDiffChanges(
+										this.diffViewProvider.originalContent || "",
+										finalContent || "",
+										relPath,
+										false,
+									) // search_and_replace is always for existing files
+								} catch (error) {
+									/* Silently handle metrics errors */
+								}
+
 								if (userEdits) {
 									await this.say(
 										"user_feedback_diff",
