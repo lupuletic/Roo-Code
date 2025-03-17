@@ -12,9 +12,10 @@ import SettingsView, { SettingsViewRef } from "./components/settings/SettingsVie
 import WelcomeView from "./components/welcome/WelcomeView"
 import McpView from "./components/mcp/McpView"
 import PromptsView from "./components/prompts/PromptsView"
+import MetricsView from "./components/metrics/MetricsView"
 import { HumanRelayDialog } from "./components/human-relay/HumanRelayDialog"
 
-type Tab = "settings" | "history" | "mcp" | "prompts" | "chat"
+type Tab = "settings" | "history" | "mcp" | "prompts" | "chat" | "metrics"
 
 type HumanRelayDialogState = {
 	isOpen: boolean
@@ -28,6 +29,7 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 	promptsButtonClicked: "prompts",
 	mcpButtonClicked: "mcp",
 	historyButtonClicked: "history",
+	metricsButtonClicked: "metrics",
 }
 
 const App = () => {
@@ -104,6 +106,7 @@ const App = () => {
 			{tab === "mcp" && <McpView onDone={() => switchTab("chat")} />}
 			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
 			{tab === "settings" && <SettingsView ref={settingsRef} onDone={() => setTab("chat")} />}
+			{tab === "metrics" && <MetricsView onDone={() => switchTab("chat")} />}
 			<ChatView
 				isHidden={tab !== "chat"}
 				showAnnouncement={showAnnouncement}

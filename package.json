@@ -105,6 +105,11 @@
 				"icon": "$(question)"
 			},
 			{
+				"command": "roo-cline.metricsButtonClicked",
+				"title": "Metrics",
+				"icon": "$(graph)"
+			},
+			{
 				"command": "roo-cline.openInNewTab",
 				"title": "Open In New Tab",
 				"category": "Roo Code"
@@ -222,18 +227,23 @@
 					"when": "view == roo-cline.SidebarProvider"
 				},
 				{
-					"command": "roo-cline.popoutButtonClicked",
+					"command": "roo-cline.metricsButtonClicked",
 					"group": "navigation@5",
 					"when": "view == roo-cline.SidebarProvider"
 				},
 				{
-					"command": "roo-cline.settingsButtonClicked",
+					"command": "roo-cline.popoutButtonClicked",
 					"group": "navigation@6",
 					"when": "view == roo-cline.SidebarProvider"
 				},
 				{
-					"command": "roo-cline.helpButtonClicked",
+					"command": "roo-cline.settingsButtonClicked",
 					"group": "navigation@7",
+					"when": "view == roo-cline.SidebarProvider"
+				},
+				{
+					"command": "roo-cline.helpButtonClicked",
+					"group": "navigation@8",
 					"when": "view == roo-cline.SidebarProvider"
 				}
 			]

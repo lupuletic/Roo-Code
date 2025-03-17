@@ -3,7 +3,6 @@ import { useAppTranslation } from "@/i18n/TranslationContext"
 import { SetCachedStateField } from "./types"
 import { SectionHeader } from "./SectionHeader"
 import { Section } from "./Section"
-import CodeMetricsPanel from "../metrics/CodeMetricsPanel"
 
 export type MetricsSettingsProps = {
 	setCachedStateField: SetCachedStateField<any>
@@ -22,7 +21,9 @@ export const MetricsSettings = ({ setCachedStateField }: MetricsSettingsProps) =
 			</SectionHeader>
 
 			<Section>
-				<CodeMetricsPanel />
+				<div className="p-4 text-vscode-foreground">
+					<p>{t("settings:metrics.movedToToolbar")}</p>
+				</div>
 			</Section>
 		</>
 	)
