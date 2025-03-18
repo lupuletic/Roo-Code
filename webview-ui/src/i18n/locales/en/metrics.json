@@ -4,6 +4,7 @@
 	"error": "Error loading metrics",
 	"retry": "Retry",
 	"reset": "Reset Metrics",
+	"refresh": "Refresh Metrics",
 	"resetConfirmation": "Are you sure you want to reset all metrics?",
 	"aiGenerated": "AI Generated",
 	"manual": "Manual",

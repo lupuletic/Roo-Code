@@ -60,7 +60,7 @@ const CodeMetricsPanel: React.FC = () => {
 		window.addEventListener("message", messageHandler)
 
 		// Set up periodic refresh every 5 minutes
-		const interval = setInterval(fetchMetrics, 5 * 60 * 1000)
+		const interval = setInterval(fetchMetrics, 60 * 1000) // Changed to 1 minute for more frequent updates
 
 		return () => {
 			window.removeEventListener("message", messageHandler)
@@ -98,15 +98,26 @@ const CodeMetricsPanel: React.FC = () => {
 			{/* Header with title and reset button */}
 			<div className="flex justify-between items-center mb-6">
 				<h2 className="text-xl font-semibold text-vscode-foreground">{t("title")}</h2>
-				<Tooltip content={t("resetConfirmation")}>
-					<Button
-						variant="outline"
-						size="sm"
-						onClick={resetMetrics}
-						className="hover:bg-vscode-button-secondaryBackground transition-colors">
-						{t("reset")}
-					</Button>
-				</Tooltip>
+				<div className="flex space-x-2">
+					<Tooltip content={t("refresh")}>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={fetchMetrics}
+							className="hover:bg-vscode-button-secondaryBackground transition-colors">
+							{t("refresh")}
+						</Button>
+					</Tooltip>
+					<Tooltip content={t("resetConfirmation")}>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={resetMetrics}
+							className="hover:bg-vscode-button-secondaryBackground transition-colors">
+							{t("reset")}
+						</Button>
+					</Tooltip>
+				</div>
 			</div>
 
 			{/* Improved tab navigation */}

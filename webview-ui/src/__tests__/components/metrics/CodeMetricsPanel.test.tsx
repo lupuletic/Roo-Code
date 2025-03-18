@@ -10,6 +10,7 @@ jest.mock("react-i18next", () => ({
 			const translations: Record<string, string> = {
 				title: "Code Metrics",
 				reset: "Reset Metrics",
+				refresh: "Refresh Metrics",
 				resetConfirmation: "Are you sure you want to reset all metrics?",
 				aiGenerated: "AI Generated",
 				manual: "Manual",
@@ -187,5 +188,18 @@ describe("CodeMetricsPanel", () => {
 		expect(vscode.postMessage).toHaveBeenCalledWith({
 			type: "getCodeMetrics",
 		})
+	})
+
+	it("refreshes metrics when refresh button is clicked", async () => {
+		render(<CodeMetricsPanel />)
+
+		// Wait for metrics to load
+		await waitFor(() => {
+			expect(screen.getByText("Code Metrics")).toBeInTheDocument()
+		})
+
+		// Click refresh button and verify postMessage was called
+		fireEvent.click(screen.getByText("Refresh Metrics"))
+		expect(vscode.postMessage).toHaveBeenCalledWith({ type: "getCodeMetrics" })
 	})
 })
