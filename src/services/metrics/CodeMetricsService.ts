@@ -13,12 +13,59 @@ interface DiffChanges {
  * Compute the number of line additions and deletions between two text contents
  */
 function getDiffChanges(originalContent: string, newContent: string): DiffChanges {
-	const originalLines = originalContent.split("\n")
-	const newLines = newContent.split("\n")
+	// Split content into lines and handle empty content
+	const originalLines = originalContent ? originalContent.split("\n") : []
+	const newLines = newContent ? newContent.split("\n") : []
 
-	// Simple line-by-line diff calculation
-	const additions = Math.max(0, newLines.length - originalLines.length)
-	const deletions = Math.max(0, originalLines.length - newLines.length)
+	// Count actual line changes by comparing line by line
+	let additions = 0
+	let deletions = 0
+
+	// Use a simple LCS-based diff approach
+	const maxLines = Math.max(originalLines.length, newLines.length)
+	let i = 0,
+		j = 0
+
+	while (i < originalLines.length || j < newLines.length) {
+		// If we've reached the end of either array, the remaining lines in the other are all changes
+		if (i >= originalLines.length) {
+			additions += newLines.length - j
+			break
+		}
+		if (j >= newLines.length) {
+			deletions += originalLines.length - i
+			break
+		}
+
+		// If lines are the same, move to next line in both arrays
+		if (originalLines[i] === newLines[j]) {
+			i++
+			j++
+		} else {
+			// Try to find the current original line in the remaining new lines
+			const nextMatchInNew = newLines.indexOf(originalLines[i], j)
+			// Try to find the current new line in the remaining original lines
+			const nextMatchInOriginal = originalLines.indexOf(newLines[j], i)
+
+			// Choose the closest match to minimize changes
+			if (nextMatchInNew !== -1 && (nextMatchInOriginal === -1 || nextMatchInNew - j < nextMatchInOriginal - i)) {
+				// Current original line found later in new content, so lines were added
+				additions += nextMatchInNew - j
+				j = nextMatchInNew
+			} else if (nextMatchInOriginal !== -1) {
+				// Current new line found later in original content, so lines were deleted
+				deletions += nextMatchInOriginal - i
+				i = nextMatchInOriginal
+			} else {
+				// No match found, count as both addition and deletion
+				additions++
+				deletions++
+				i++
+				j++
+			}
+		}
+	}
+
 	return { additions, deletions }
 }
 
@@ -82,6 +129,10 @@ export class CodeMetricsService {
 	private metrics: MetricsData = defaultMetricsData
 	private disposables: vscode.Disposable[] = []
 	private documentChangeListeners: Map<string, vscode.Disposable> = new Map()
+	private isApplyingAIDiff: boolean = false
+	private modifiedFilesSet: Set<string> = new Set()
+	private debounceTimers: Map<string, NodeJS.Timeout> = new Map()
+	private readonly DEBOUNCE_DELAY = 1000 // 1 second debounce
 
 	private constructor(context: vscode.ExtensionContext) {
 		this.context = context
@@ -190,8 +241,35 @@ export class CodeMetricsService {
 	 * Track manual text changes in a document
 	 */
 	private trackManualTextChanges(event: vscode.TextDocumentChangeEvent): void {
+		// Skip tracking if changes are being applied by AI
+		if (this.isApplyingAIDiff) {
+			return
+		}
+
+		const documentUri = event.document.uri.toString()
+
+		// Clear any existing debounce timer for this document
+		if (this.debounceTimers.has(documentUri)) {
+			clearTimeout(this.debounceTimers.get(documentUri))
+		}
+
+		// Set a new debounce timer
+		this.debounceTimers.set(
+			documentUri,
+			setTimeout(() => {
+				this.processDocumentChanges(event)
+				this.debounceTimers.delete(documentUri)
+			}, this.DEBOUNCE_DELAY),
+		)
+	}
+
+	/**
+	 * Process document changes after debounce
+	 */
+	private processDocumentChanges(event: vscode.TextDocumentChangeEvent): void {
 		let linesAdded = 0
 		let linesDeleted = 0
+		const documentUri = event.document.uri.toString()
 
 		// Process each change in the document
 		for (const change of event.contentChanges) {
@@ -205,10 +283,16 @@ export class CodeMetricsService {
 
 		// Update metrics if there were actual changes
 		if (linesAdded > 0 || linesDeleted > 0) {
+			// Track this file as modified if not already in the set
+			const isNewlyModified = !this.modifiedFilesSet.has(documentUri)
+			if (isNewlyModified) {
+				this.modifiedFilesSet.add(documentUri)
+			}
+
 			this.updateMetrics(CodeChangeSource.MANUAL, {
 				linesAdded,
 				linesDeleted,
-				filesModified: 1,
+				filesModified: isNewlyModified ? 1 : 0,
 				filesCreated: 0,
 				lastUpdated: Date.now(),
 			})
@@ -219,12 +303,22 @@ export class CodeMetricsService {
 	 * Track AI code changes from applying diffs
 	 */
 	public trackAIDiffChanges(originalContent: string, newContent: string, filePath: string, isNewFile: boolean): void {
+		// Set flag to prevent manual tracking of these changes
+		this.isApplyingAIDiff = true
+		const fileUri = vscode.Uri.file(filePath).toString()
+
 		const { additions, deletions } = getDiffChanges(originalContent, newContent)
+
+		// Track this file as modified if not already in the set
+		const isNewlyModified = !isNewFile && !this.modifiedFilesSet.has(fileUri)
+		if (isNewlyModified || isNewFile) {
+			this.modifiedFilesSet.add(fileUri)
+		}
 
 		this.updateMetrics(CodeChangeSource.AI_GENERATED, {
 			linesAdded: additions,
 			linesDeleted: deletions,
-			filesModified: isNewFile ? 0 : 1,
+			filesModified: isNewlyModified ? 1 : 0,
 			filesCreated: isNewFile ? 1 : 0,
 			lastUpdated: Date.now(),
 		})
@@ -237,6 +331,11 @@ export class CodeMetricsService {
 			isNewFile: isNewFile,
 			fileExtension: filePath.split(".").pop(),
 		})
+
+		// Reset flag after a short delay to ensure all document change events have been processed
+		setTimeout(() => {
+			this.isApplyingAIDiff = false
+		}, 100)
 	}
 
 	/**
@@ -288,6 +387,7 @@ export class CodeMetricsService {
 	 */
 	public async resetMetrics(): Promise<void> {
 		this.metrics = { ...defaultMetricsData }
+		this.modifiedFilesSet.clear()
 		await this.saveMetrics()
 	}
 
@@ -301,5 +401,9 @@ export class CodeMetricsService {
 		// Clear document change listeners
 		this.documentChangeListeners.forEach((d) => d.dispose())
 		this.documentChangeListeners.clear()
+
+		// Clear debounce timers
+		this.debounceTimers.forEach((timer) => clearTimeout(timer))
+		this.debounceTimers.clear()
 	}
 }
