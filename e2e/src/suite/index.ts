@@ -1,8 +1,7 @@
 import * as path from "path"
 import Mocha from "mocha"
 import { glob } from "glob"
-import { ClineAPI } from "../../exports/cline"
-import { ClineProvider } from "../../core/webview/ClineProvider"
+import { ClineAPI, ClineProvider } from "../../../src/exports/cline"
 import * as vscode from "vscode"
 
 declare global {
@@ -13,23 +12,23 @@ declare global {
 }
 
 export async function run(): Promise<void> {
-	// Create the mocha test
 	const mocha = new Mocha({
 		ui: "tdd",
-		timeout: 600000, // 10 minutes to compensate for time communicating with LLM while running in GHA
+		timeout: 600000, // 10 minutes to compensate for time communicating with LLM while running in GHA.
 	})
 
 	const testsRoot = path.resolve(__dirname, "..")
 
 	try {
-		// Find all test files
+		// Find all test files.
 		const files = await glob("**/**.test.js", { cwd: testsRoot })
 
-		// Add files to the test suite
+		// Add files to the test suite.
 		files.forEach((f: string) => mocha.addFile(path.resolve(testsRoot, f)))
 
-		//Set up global extension, api, provider, and panel
+		// Set up global extension, api, provider, and panel.
 		globalThis.extension = vscode.extensions.getExtension("RooVeterinaryInc.roo-cline")
+
 		if (!globalThis.extension) {
 			throw new Error("Extension not found")
 		}
@@ -37,9 +36,12 @@ export async function run(): Promise<void> {
 		globalThis.api = globalThis.extension.isActive
 			? globalThis.extension.exports
 			: await globalThis.extension.activate()
+
 		globalThis.provider = globalThis.api.sidebarProvider
+
 		await globalThis.provider.updateGlobalState("apiProvider", "openrouter")
 		await globalThis.provider.updateGlobalState("openRouterModelId", "anthropic/claude-3.5-sonnet")
+
 		await globalThis.provider.storeSecret(
 			"openRouterApiKey",
 			process.env.OPENROUTER_API_KEY || "sk-or-v1-fake-api-key",
@@ -71,7 +73,7 @@ export async function run(): Promise<void> {
 			await new Promise((resolve) => setTimeout(resolve, interval))
 		}
 
-		// Run the mocha test
+		// Run the mocha test.
 		return new Promise((resolve, reject) => {
 			try {
 				mocha.run((failures: number) => {

@@ -107,7 +107,7 @@ jest.mock(
 // Mock DiffStrategy
 jest.mock("../../diff/DiffStrategy", () => ({
 	getDiffStrategy: jest.fn().mockImplementation(() => ({
-		getToolDescription: jest.fn().mockReturnValue("edit_file tool description"),
+		getToolDescription: jest.fn().mockReturnValue("apply_diff tool description"),
 	})),
 }))
 
@@ -369,7 +369,7 @@ describe("ClineProvider", () => {
 			uriScheme: "vscode",
 			soundEnabled: false,
 			diffEnabled: false,
-			checkpointsEnabled: false,
+			enableCheckpoints: false,
 			writeDelayMs: 1000,
 			browserViewportSize: "900x600",
 			fuzzyMatchThreshold: 1.0,
@@ -677,7 +677,7 @@ describe("ClineProvider", () => {
 			},
 			mode: "code",
 			diffEnabled: true,
-			checkpointsEnabled: false,
+			enableCheckpoints: false,
 			fuzzyMatchThreshold: 1.0,
 			experiments: experimentDefault,
 		} as any)

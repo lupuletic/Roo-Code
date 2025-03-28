@@ -1,5 +1,77 @@
 # Roo Code Changelog
 
+## [3.7.11]
+
+- Don't honor custom max tokens for non thinking models
+- Include custom modes in mode switching keyboard shortcut
+- Support read-only modes that can run commands
+
+## [3.7.10]
+
+- Add Gemini models on Vertex AI (thanks @ashktn!)
+- Keyboard shortcuts to switch modes (thanks @aheizi!)
+- Add support for Mermaid diagrams (thanks Cline!)
+
+## [3.7.9]
+
+- Delete task confirmation enhancements
+- Smarter context window management
+- Prettier thinking blocks
+- Fix maxTokens defaults for Claude 3.7 Sonnet models
+- Terminal output parsing improvements (thanks @KJ7LNW!)
+- UI fix to dropdown hover colors (thanks @SamirSaji!)
+- Add support for Claude Sonnet 3.7 thinking via Vertex AI (thanks @lupuletic!)
+
+## [3.7.8]
+
+- Add Vertex AI prompt caching support for Claude models (thanks @aitoroses and @lupuletic!)
+- Add gpt-4.5-preview
+- Add an advanced feature to customize the system prompt
+
+## [3.7.7]
+
+- Graduate checkpoints out of beta
+- Fix enhance prompt button when using Thinking Sonnet
+- Add tooltips to make what buttons do more obvious
+
+## [3.7.6]
+
+- Handle really long text better in the in the ChatRow similar to TaskHeader (thanks @joemanley201!)
+- Support multiple files in drag-and-drop
+- Truncate search_file output to avoid crashing the extension
+- Better OpenRouter error handling (no more "Provider Error")
+- Add slider to control max output tokens for thinking models
+
+## [3.7.5]
+
+- Fix context window truncation math (see [#1173](https://github.com/RooVetGit/Roo-Code/issues/1173))
+- Fix various issues with the model picker (thanks @System233!)
+- Fix model input / output cost parsing (thanks @System233!)
+- Add drag-and-drop for files
+- Enable the "Thinking Budget" slider for Claude 3.7 Sonnet on OpenRouter
+
+## [3.7.4]
+
+- Fix a bug that prevented the "Thinking" setting from properly updating when switching profiles.
+
+## [3.7.3]
+
+- Support for ["Thinking"](https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking) Sonnet 3.7 when using the Anthropic provider.
+
+## [3.7.2]
+
+- Fix computer use and prompt caching for OpenRouter's `anthropic/claude-3.7-sonnet:beta` (thanks @cte!)
+- Fix sliding window calculations for Sonnet 3.7 that were causing a context window overflow (thanks @cte!)
+- Encourage diff editing more strongly in the system prompt (thanks @hannesrudolph!)
+
+## [3.7.1]
+
+- Add AWS Bedrock support for Sonnet 3.7 and update some defaults to Sonnet 3.7 instead of 3.5
+
+## [3.7.0]
+
+- Introducing Roo Code 3.7, with support for the new Claude Sonnet 3.7. Because who cares about skipping version numbers anymore? Thanks @lupuletic and @cte for the PRs!
+
 ## [3.3.26]
 
 - Adjust the default prompt for Debug mode to focus more on diagnosis and to require user confirmation before moving on to implementation
@@ -479,7 +551,7 @@ Join us at https://www.reddit.com/r/RooCode to share your custom modes and be pa
 ## [2.1.14]
 
 - Fix bug where diffs were not being applied correctly and try Aider's [unified diff prompt](https://github.com/Aider-AI/aider/blob/3995accd0ca71cea90ef76d516837f8c2731b9fe/aider/coders/udiff_prompts.py#L75-L105)
-- If diffs are enabled, automatically reject create_file commands that lead to truncated output
+- If diffs are enabled, automatically reject write_to_file commands that lead to truncated output
 
 ## [2.1.13]
 

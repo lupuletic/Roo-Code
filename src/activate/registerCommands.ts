@@ -41,6 +41,9 @@ const getCommandsMap = ({ context, outputChannel, provider }: RegisterCommandOpt
 		"roo-cline.helpButtonClicked": () => {
 			vscode.env.openExternal(vscode.Uri.parse("https://docs.roocode.com"))
 		},
+		"roo-cline.metricsButtonClicked": () => {
+			provider.postMessageToWebview({ type: "action", action: "metricsButtonClicked" })
+		},
 	}
 }
 

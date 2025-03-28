@@ -28,6 +28,7 @@ import TaskHeader from "./TaskHeader"
 import AutoApproveMenu from "./AutoApproveMenu"
 import { AudioType } from "../../../../src/shared/WebviewMessage"
 import { validateCommand } from "../../utils/command-validation"
+import { getAllModes } from "../../../../src/shared/modes"
 
 interface ChatViewProps {
 	isHidden: boolean
@@ -37,6 +38,9 @@ interface ChatViewProps {
 }
 
 export const MAX_IMAGES_PER_MESSAGE = 20 // Anthropic limits to 20 images
+
+const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0
+const modeShortcutText = `${isMac ? "⌘" : "Ctrl"} + . for next mode`
 
 const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryView }: ChatViewProps) => {
 	const {
@@ -56,6 +60,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		setMode,
 		autoApprovalEnabled,
 		alwaysAllowModeSwitch,
+		customModes,
 	} = useExtensionState()
 
 	//const task = messages.length > 0 ? (messages[0].say === "task" ? messages[0] : undefined) : undefined) : undefined
@@ -880,9 +885,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 	const placeholderText = useMemo(() => {
 		const baseText = task ? "Type a message..." : "Type your task here..."
 		const contextText = "(@ to add context, / to switch modes"
-		const imageText = shouldDisableImages ? "" : ", hold shift to drag in images"
-		const helpText = imageText ? `\n${contextText}${imageText})` : `\n${contextText})`
-		return baseText + helpText
+		const imageText = shouldDisableImages ? ", hold shift to drag in files" : ", hold shift to drag in files/images"
+		return baseText + `\n${contextText}${imageText})`
 	}, [task, shouldDisableImages])
 
 	const itemContent = useCallback(
@@ -963,6 +967,34 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 		writeDelayMs,
 		isWriteToolAction,
 	])
+
+	// Function to handle mode switching
+	const switchToNextMode = useCallback(() => {
+		const allModes = getAllModes(customModes)
+		const currentModeIndex = allModes.findIndex((m) => m.slug === mode)
+		const nextModeIndex = (currentModeIndex + 1) % allModes.length
+		setMode(allModes[nextModeIndex].slug)
+	}, [mode, setMode, customModes])
+
+	// Add keyboard event handler
+	const handleKeyDown = useCallback(
+		(event: KeyboardEvent) => {
+			// Check for Command + . (period)
+			if ((event.metaKey || event.ctrlKey) && event.key === ".") {
+				event.preventDefault() // Prevent default browser behavior
+				switchToNextMode()
+			}
+		},
+		[switchToNextMode],
+	)
+
+	// Add event listener
+	useEffect(() => {
+		window.addEventListener("keydown", handleKeyDown)
+		return () => {
+			window.removeEventListener("keydown", handleKeyDown)
+		}
+	}, [handleKeyDown])
 
 	return (
 		<div
@@ -1078,7 +1110,8 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 								onClick={() => {
 									scrollToBottomSmooth()
 									disableAutoScrollRef.current = false
-								}}>
+								}}
+								title="Scroll to bottom of chat">
 								<span className="codicon codicon-chevron-down" style={{ fontSize: "18px" }}></span>
 							</ScrollToBottomButton>
 						</div>
@@ -1102,6 +1135,25 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 										flex: secondaryButtonText ? 1 : 2,
 										marginRight: secondaryButtonText ? "6px" : "0",
 									}}
+									title={
+										primaryButtonText === "Retry"
+											? "Try the operation again"
+											: primaryButtonText === "Save"
+												? "Save the file changes"
+												: primaryButtonText === "Approve"
+													? "Approve this action"
+													: primaryButtonText === "Run Command"
+														? "Execute this command"
+														: primaryButtonText === "Start New Task"
+															? "Begin a new task"
+															: primaryButtonText === "Resume Task"
+																? "Continue the current task"
+																: primaryButtonText === "Proceed Anyways"
+																	? "Continue despite warnings"
+																	: primaryButtonText === "Proceed While Running"
+																		? "Continue while command executes"
+																		: undefined
+									}
 									onClick={(e) => handlePrimaryButtonClick(inputValue, selectedImages)}>
 									{primaryButtonText}
 								</VSCodeButton>
@@ -1114,6 +1166,17 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 										flex: isStreaming ? 2 : 1,
 										marginLeft: isStreaming ? 0 : "6px",
 									}}
+									title={
+										isStreaming
+											? "Cancel the current operation"
+											: secondaryButtonText === "Start New Task"
+												? "Begin a new task"
+												: secondaryButtonText === "Reject"
+													? "Reject this action"
+													: secondaryButtonText === "Terminate"
+														? "End the current task"
+														: undefined
+									}
 									onClick={(e) => handleSecondaryButtonClick(inputValue, selectedImages)}>
 									{isStreaming ? "Cancel" : secondaryButtonText}
 								</VSCodeButton>
@@ -1141,6 +1204,7 @@ const ChatView = ({ isHidden, showAnnouncement, hideAnnouncement, showHistoryVie
 				}}
 				mode={mode}
 				setMode={setMode}
+				modeShortcutText={modeShortcutText}
 			/>
 
 			<div id="chat-view-portal" />

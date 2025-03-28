@@ -1,15 +1,7 @@
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
 import { VSCodeButton, VSCodeCheckbox, VSCodeLink, VSCodeTextField } from "@vscode/webview-ui-toolkit/react"
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
-import { ExtensionStateContextType, useExtensionState } from "../../context/ExtensionStateContext"
-import { validateApiConfiguration, validateModelId } from "../../utils/validate"
-import { vscode } from "../../utils/vscode"
-import ApiOptions from "./ApiOptions"
-import ExperimentalFeature from "./ExperimentalFeature"
-import { EXPERIMENT_IDS, experimentConfigsMap, ExperimentId } from "../../../../src/shared/experiments"
-import ApiConfigManager from "./ApiConfigManager"
-import { Dropdown } from "vscrui"
-import type { DropdownOption } from "vscrui"
-import { ApiConfiguration } from "../../../../src/shared/api"
+import { Button, Dropdown, type DropdownOption } from "vscrui"
+
 import {
 	AlertDialog,
 	AlertDialogContent,
@@ -19,7 +11,18 @@ import {
 	AlertDialogAction,
 	AlertDialogHeader,
 	AlertDialogFooter,
-} from "../ui/alert-dialog"
+} from "@/components/ui"
+
+import { vscode } from "../../utils/vscode"
+import { ExtensionStateContextType, useExtensionState } from "../../context/ExtensionStateContext"
+import { EXPERIMENT_IDS, experimentConfigsMap, ExperimentId } from "../../../../src/shared/experiments"
+import { ApiConfiguration } from "../../../../src/shared/api"
+
+import ExperimentalFeature from "./ExperimentalFeature"
+import ApiConfigManager from "./ApiConfigManager"
+import ApiOptions from "./ApiOptions"
+import { createEmptyMetrics } from "../../../../src/utils/metrics"
+import { UsageMetrics } from "./UsageMetrics"
 
 type SettingsViewProps = {
 	onDone: () => void
@@ -31,19 +34,19 @@ export interface SettingsViewRef {
 
 const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone }, ref) => {
 	const extensionState = useExtensionState()
-	const [apiErrorMessage, setApiErrorMessage] = useState<string | undefined>(undefined)
-	const [modelIdErrorMessage, setModelIdErrorMessage] = useState<string | undefined>(undefined)
 	const [commandInput, setCommandInput] = useState("")
 	const [isDiscardDialogShow, setDiscardDialogShow] = useState(false)
 	const [cachedState, setCachedState] = useState(extensionState)
 	const [isChangeDetected, setChangeDetected] = useState(false)
 	const prevApiConfigName = useRef(extensionState.currentApiConfigName)
 	const confirmDialogHandler = useRef<() => void>()
+	const prevUsageMetricsEnabled = useRef(extensionState.usageMetricsEnabled)
+	const prevUsageMetricsLastReset = useRef(extensionState.usageMetrics?.lastReset)
+	const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined)
 
 	// TODO: Reduce WebviewMessage/ExtensionState complexity
 	const { currentApiConfigName } = extensionState
 	const {
-		apiConfiguration,
 		alwaysAllowReadOnly,
 		allowedCommands,
 		alwaysAllowBrowser,
@@ -53,7 +56,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 		alwaysAllowWrite,
 		alwaysApproveResubmit,
 		browserViewportSize,
-		checkpointsEnabled,
+		enableCheckpoints,
 		diffEnabled,
 		experiments,
 		fuzzyMatchThreshold,
@@ -66,21 +69,53 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 		soundVolume,
 		terminalOutputLineLimit,
 		writeDelayMs,
+		usageMetricsEnabled,
+		usageMetrics,
 	} = cachedState
 
+	// Track metrics updates for debugging
 	useEffect(() => {
-		// Update only when currentApiConfigName is changed
-		// Expected to be triggered by loadApiConfiguration/upsertApiConfiguration
-		if (prevApiConfigName.current === currentApiConfigName) {
+		console.log("extensionState.usageMetrics update detected", extensionState.usageMetrics)
+	}, [extensionState.usageMetrics])
+
+	useEffect(() => {
+		console.log("extensionState.usageMetricsEnabled update detected", extensionState.usageMetricsEnabled)
+	}, [extensionState.usageMetricsEnabled])
+
+	//Make sure apiConfiguration is initialized and managed by SettingsView
+	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
+
+	useEffect(() => {
+		// Update when currentApiConfigName is changed or when metrics changes
+		// This ensures metrics updates are reflected in the UI
+		const apiConfigChanged = prevApiConfigName.current !== currentApiConfigName
+		const metricsEnabledChanged = prevUsageMetricsEnabled.current !== extensionState.usageMetricsEnabled
+		const metricsDataChanged = prevUsageMetricsLastReset.current !== extensionState.usageMetrics?.lastReset
+
+		if (!apiConfigChanged && !metricsEnabledChanged && !metricsDataChanged) {
 			return
 		}
-		setCachedState((prevCachedState) => ({
-			...prevCachedState,
-			...extensionState,
-		}))
+
+		// Update cached state
+		setCachedState((prevCachedState) => ({ ...prevCachedState, ...extensionState }))
+
 		prevApiConfigName.current = currentApiConfigName
+		prevUsageMetricsEnabled.current = extensionState.usageMetricsEnabled
+		prevUsageMetricsLastReset.current = extensionState.usageMetrics?.lastReset
+
+		if (metricsEnabledChanged || metricsDataChanged) {
+			console.log("Updating cachedState for metrics changes")
+		}
+
+		// console.log("useEffect: currentApiConfigName changed, setChangeDetected -> false")
 		setChangeDetected(false)
-	}, [currentApiConfigName, extensionState, isChangeDetected])
+	}, [
+		currentApiConfigName,
+		extensionState,
+		isChangeDetected,
+		extensionState.usageMetricsEnabled,
+		extensionState.usageMetrics,
+	])
 
 	const setCachedStateField = useCallback(
 		<K extends keyof ExtensionStateContextType>(field: K, value: ExtensionStateContextType[K]) => {
@@ -88,11 +123,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 				if (prevState[field] === value) {
 					return prevState
 				}
+
+				// console.log(`setCachedStateField(${field} -> ${value}): setChangeDetected -> true`)
 				setChangeDetected(true)
-				return {
-					...prevState,
-					[field]: value,
-				}
+				return { ...prevState, [field]: value }
 			})
 		},
 		[],
@@ -104,14 +138,11 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 				if (prevState.apiConfiguration?.[field] === value) {
 					return prevState
 				}
+
+				// console.log(`setApiConfigurationField(${field} -> ${value}): setChangeDetected -> true`)
 				setChangeDetected(true)
-				return {
-					...prevState,
-					apiConfiguration: {
-						...prevState.apiConfiguration,
-						[field]: value,
-					},
-				}
+
+				return { ...prevState, apiConfiguration: { ...prevState.apiConfiguration, [field]: value } }
 			})
 		},
 		[],
@@ -122,7 +153,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			if (prevState.experiments?.[id] === enabled) {
 				return prevState
 			}
+
+			// console.log("setExperimentEnabled: setChangeDetected -> true")
 			setChangeDetected(true)
+
 			return {
 				...prevState,
 				experiments: { ...prevState.experiments, [id]: enabled },
@@ -130,17 +164,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 		})
 	}, [])
 
-	const handleSubmit = () => {
-		const apiValidationResult = validateApiConfiguration(apiConfiguration)
-		const modelIdValidationResult = validateModelId(
-			apiConfiguration,
-			extensionState.glamaModels,
-			extensionState.openRouterModels,
-		)
+	const isSettingValid = !errorMessage
 
-		setApiErrorMessage(apiValidationResult)
-		setModelIdErrorMessage(modelIdValidationResult)
-		if (!apiValidationResult && !modelIdValidationResult) {
+	const handleSubmit = () => {
+		if (isSettingValid) {
 			vscode.postMessage({ type: "alwaysAllowReadOnly", bool: alwaysAllowReadOnly })
 			vscode.postMessage({ type: "alwaysAllowWrite", bool: alwaysAllowWrite })
 			vscode.postMessage({ type: "alwaysAllowExecute", bool: alwaysAllowExecute })
@@ -150,50 +177,27 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			vscode.postMessage({ type: "soundEnabled", bool: soundEnabled })
 			vscode.postMessage({ type: "soundVolume", value: soundVolume })
 			vscode.postMessage({ type: "diffEnabled", bool: diffEnabled })
-			vscode.postMessage({ type: "checkpointsEnabled", bool: checkpointsEnabled })
+			vscode.postMessage({ type: "enableCheckpoints", bool: enableCheckpoints })
 			vscode.postMessage({ type: "browserViewportSize", text: browserViewportSize })
 			vscode.postMessage({ type: "fuzzyMatchThreshold", value: fuzzyMatchThreshold ?? 1.0 })
 			vscode.postMessage({ type: "writeDelayMs", value: writeDelayMs })
 			vscode.postMessage({ type: "screenshotQuality", value: screenshotQuality ?? 75 })
 			vscode.postMessage({ type: "terminalOutputLineLimit", value: terminalOutputLineLimit ?? 500 })
 			vscode.postMessage({ type: "mcpEnabled", bool: mcpEnabled })
+			vscode.postMessage({ type: "usageMetricsEnabled", bool: usageMetricsEnabled })
+			console.log("Saving usageMetricsEnabled:", usageMetricsEnabled)
 			vscode.postMessage({ type: "alwaysApproveResubmit", bool: alwaysApproveResubmit })
 			vscode.postMessage({ type: "requestDelaySeconds", value: requestDelaySeconds })
 			vscode.postMessage({ type: "rateLimitSeconds", value: rateLimitSeconds })
 			vscode.postMessage({ type: "maxOpenTabsContext", value: maxOpenTabsContext })
 			vscode.postMessage({ type: "currentApiConfigName", text: currentApiConfigName })
-			vscode.postMessage({
-				type: "updateExperimental",
-				values: experiments,
-			})
+			vscode.postMessage({ type: "updateExperimental", values: experiments })
 			vscode.postMessage({ type: "alwaysAllowModeSwitch", bool: alwaysAllowModeSwitch })
-
-			vscode.postMessage({
-				type: "upsertApiConfiguration",
-				text: currentApiConfigName,
-				apiConfiguration,
-			})
-			// onDone()
+			vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
+			// console.log("handleSubmit: setChangeDetected -> false")
 			setChangeDetected(false)
 		}
 	}
-
-	useEffect(() => {
-		setApiErrorMessage(undefined)
-		setModelIdErrorMessage(undefined)
-	}, [apiConfiguration])
-
-	// Initial validation on mount
-	useEffect(() => {
-		const apiValidationResult = validateApiConfiguration(apiConfiguration)
-		const modelIdValidationResult = validateModelId(
-			apiConfiguration,
-			extensionState.glamaModels,
-			extensionState.openRouterModels,
-		)
-		setApiErrorMessage(apiValidationResult)
-		setModelIdErrorMessage(modelIdValidationResult)
-	}, [apiConfiguration, extensionState.glamaModels, extensionState.openRouterModels])
 
 	const checkUnsaveChanges = useCallback(
 		(then: () => void) => {
@@ -207,13 +211,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 		[isChangeDetected],
 	)
 
-	useImperativeHandle(
-		ref,
-		() => ({
-			checkUnsaveChanges,
-		}),
-		[checkUnsaveChanges],
-	)
+	useImperativeHandle(ref, () => ({ checkUnsaveChanges }), [checkUnsaveChanges])
 
 	const onConfirmDialogResult = useCallback((confirm: boolean) => {
 		if (confirm) {
@@ -231,10 +229,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 			const newCommands = [...currentCommands, commandInput]
 			setCachedStateField("allowedCommands", newCommands)
 			setCommandInput("")
-			vscode.postMessage({
-				type: "allowedCommands",
-				commands: newCommands,
-			})
+			vscode.postMessage({ type: "allowedCommands", commands: newCommands })
 		}
 	}
 
@@ -288,13 +283,14 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 						justifyContent: "space-between",
 						gap: "6px",
 					}}>
-					<VSCodeButton
-						appearance="primary"
-						title={isChangeDetected ? "Save changes" : "Nothing changed"}
+					<Button
+						appearance={isSettingValid ? "primary" : "secondary"}
+						className={!isSettingValid ? "!border-vscode-errorForeground" : ""}
+						title={!isSettingValid ? errorMessage : isChangeDetected ? "Save changes" : "Nothing changed"}
 						onClick={handleSubmit}
-						disabled={!isChangeDetected}>
+						disabled={!isChangeDetected || !isSettingValid}>
 						Save
-					</VSCodeButton>
+					</Button>
 					<VSCodeButton
 						appearance="secondary"
 						title="Discard unsaved changes and close settings panel"
@@ -345,8 +341,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 							uriScheme={extensionState.uriScheme}
 							apiConfiguration={apiConfiguration}
 							setApiConfigurationField={setApiConfigurationField}
-							apiErrorMessage={apiErrorMessage}
-							modelIdErrorMessage={modelIdErrorMessage}
+							errorMessage={errorMessage}
+							setErrorMessage={setErrorMessage}
 						/>
 					</div>
 				</div>
@@ -748,6 +744,25 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 
 					<div style={{ marginBottom: 15 }}>
 						<VSCodeCheckbox
+							checked={enableCheckpoints}
+							onChange={(e: any) => {
+								setCachedStateField("enableCheckpoints", e.target.checked)
+							}}>
+							<span style={{ fontWeight: "500" }}>Enable automatic checkpoints</span>
+						</VSCodeCheckbox>
+						<p
+							style={{
+								fontSize: "12px",
+								marginTop: "5px",
+								color: "var(--vscode-descriptionForeground)",
+							}}>
+							When enabled, Roo will automatically create checkpoints during task execution, making it
+							easy to review changes or revert to earlier states.
+						</p>
+					</div>
+
+					<div style={{ marginBottom: 15 }}>
+						<VSCodeCheckbox
 							checked={diffEnabled}
 							onChange={(e: any) => {
 								setCachedStateField("diffEnabled", e.target.checked)
@@ -765,7 +780,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 								color: "var(--vscode-descriptionForeground)",
 							}}>
 							When enabled, Roo will be able to edit files more quickly and will automatically reject
-							truncated full-file writes. Works best with the latest Claude 3.5 Sonnet model.
+							truncated full-file writes. Works best with the latest Claude 3.7 Sonnet model.
 						</p>
 
 						{diffEnabled && (
@@ -819,28 +834,6 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 							</div>
 						)}
 
-						<div style={{ marginBottom: 15 }}>
-							<div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-								<span style={{ color: "var(--vscode-errorForeground)" }}>⚠️</span>
-								<VSCodeCheckbox
-									checked={checkpointsEnabled}
-									onChange={(e: any) => {
-										setCachedStateField("checkpointsEnabled", e.target.checked)
-									}}>
-									<span style={{ fontWeight: "500" }}>Enable experimental checkpoints</span>
-								</VSCodeCheckbox>
-							</div>
-							<p
-								style={{
-									fontSize: "12px",
-									marginTop: "5px",
-									color: "var(--vscode-descriptionForeground)",
-								}}>
-								When enabled, Roo will save a checkpoint whenever a file in the workspace is modified,
-								added or deleted, letting you easily revert to a previous state.
-							</p>
-						</div>
-
 						{Object.entries(experimentConfigsMap)
 							.filter((config) => config[0] !== "DIFF_STRATEGY")
 							.map((config) => (
@@ -859,6 +852,16 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone },
 								/>
 							))}
 					</div>
+				</div>
+
+				<div style={{ marginBottom: 40 }}>
+					<h3 style={{ color: "var(--vscode-foreground)", margin: "0 0 15px 0" }}>Usage Metrics</h3>
+					<UsageMetrics
+						usageMetrics={usageMetrics ?? createEmptyMetrics()}
+						usageMetricsEnabled={usageMetricsEnabled ?? true}
+						setUsageMetricsEnabled={(value: boolean) => setCachedStateField("usageMetricsEnabled", value)}
+						resetUsageMetrics={() => vscode.postMessage({ type: "resetUsageMetrics" })}
+					/>
 				</div>
 
 				<div

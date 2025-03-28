@@ -8,6 +8,32 @@ import { Mode, CustomModePrompts, ModeConfig } from "./modes"
 import { CustomSupportPrompts } from "./support-prompt"
 import { ExperimentId } from "./experiments"
 
+export interface UsageMetrics {
+	// Code metrics
+	linesOfCodeGenerated: number
+	filesCreated: number
+	filesModified: number
+	languageUsage: Record<string, number> // e.g. {"javascript": 200, "python": 150}
+
+	// Usage metrics
+	tasksCompleted: number
+	commandsExecuted: number
+	apiCallsMade: number
+	browserSessionsLaunched: number
+	activeUsageTimeMs: number
+
+	// Cost metrics
+	totalApiCost: number
+	costByProvider: Record<string, number>
+	costByTask: Record<string, number>
+
+	// Tool usage
+	toolUsage: Record<string, number>
+
+	// Last reset timestamp
+	lastReset: number
+}
+
 export interface LanguageModelChatSelector {
 	vendor?: string
 	family?: string
@@ -27,10 +53,11 @@ export interface ExtensionMessage {
 		| "workspaceUpdated"
 		| "invoke"
 		| "partialMessage"
-		| "glamaModels"
 		| "openRouterModels"
-		| "openAiModels"
+		| "glamaModels"
+		| "unboundModels"
 		| "requestyModels"
+		| "openAiModels"
 		| "mcpServers"
 		| "enhancedPrompt"
 		| "commitSearchResults"
@@ -43,13 +70,12 @@ export interface ExtensionMessage {
 		| "autoApprovalEnabled"
 		| "updateCustomMode"
 		| "deleteCustomMode"
-		| "unboundModels"
-		| "refreshUnboundModels"
 		| "currentCheckpointUpdated"
 	text?: string
 	action?:
 		| "chatButtonClicked"
 		| "mcpButtonClicked"
+		| "metricsButtonClicked"
 		| "settingsButtonClicked"
 		| "historyButtonClicked"
 		| "promptsButtonClicked"
@@ -67,11 +93,11 @@ export interface ExtensionMessage {
 		path?: string
 	}>
 	partialMessage?: ClineMessage
-	glamaModels?: Record<string, ModelInfo>
-	requestyModels?: Record<string, ModelInfo>
 	openRouterModels?: Record<string, ModelInfo>
-	openAiModels?: string[]
+	glamaModels?: Record<string, ModelInfo>
 	unboundModels?: Record<string, ModelInfo>
+	requestyModels?: Record<string, ModelInfo>
+	openAiModels?: string[]
 	mcpServers?: McpServer[]
 	commits?: GitCommit[]
 	listApiConfig?: ApiConfigMeta[]
@@ -112,7 +138,7 @@ export interface ExtensionState {
 	soundEnabled?: boolean
 	soundVolume?: number
 	diffEnabled?: boolean
-	checkpointsEnabled: boolean
+	enableCheckpoints: boolean
 	browserViewportSize?: string
 	screenshotQuality?: number
 	fuzzyMatchThreshold?: number
@@ -127,8 +153,11 @@ export interface ExtensionState {
 	experiments: Record<ExperimentId, boolean> // Map of experiment IDs to their enabled state
 	autoApprovalEnabled?: boolean
 	customModes: ModeConfig[]
-	toolRequirements?: Record<string, boolean> // Map of tool names to their requirements (e.g. {"edit_file": true} if diffEnabled)
+	toolRequirements?: Record<string, boolean> // Map of tool names to their requirements (e.g. {"apply_diff": true} if diffEnabled)
 	maxOpenTabsContext: number // Maximum number of VSCode open tabs to include in context (0-500)
+	cwd?: string // Current working directory
+	usageMetricsEnabled?: boolean // Whether usage metrics are enabled
+	usageMetrics?: UsageMetrics // Usage metrics data
 }
 
 export interface ClineMessage {

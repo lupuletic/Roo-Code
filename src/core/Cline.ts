@@ -22,7 +22,7 @@ import {
 	everyLineHasLineNumbers,
 	truncateOutput,
 } from "../integrations/misc/extract-text"
-import { TerminalManager } from "../integrations/terminal/TerminalManager"
+import { TerminalManager, ExitCodeDetails } from "../integrations/terminal/TerminalManager"
 import { UrlContentFetcher } from "../services/browser/UrlContentFetcher"
 import { listFiles } from "../services/glob/list-files"
 import { regexSearchFiles } from "../services/ripgrep"
@@ -47,6 +47,8 @@ import {
 import { getApiMetrics } from "../shared/getApiMetrics"
 import { HistoryItem } from "../shared/HistoryItem"
 import { ClineAskResponse } from "../shared/WebviewMessage"
+import { GlobalFileNames } from "../shared/globalFileNames"
+import { defaultModeSlug, getModeBySlug, getFullModeDetails } from "../shared/modes"
 import { calculateApiCost } from "../utils/cost"
 import { fileExistsAtPath } from "../utils/fs"
 import { arePathsEqual, getReadablePath } from "../utils/path"
@@ -54,24 +56,29 @@ import { parseMentions } from "./mentions"
 import { AssistantMessageContent, parseAssistantMessage, ToolParamName, ToolUseName } from "./assistant-message"
 import { formatResponse } from "./prompts/responses"
 import { SYSTEM_PROMPT } from "./prompts/system"
-import { modes, defaultModeSlug, getModeBySlug, getFullModeDetails } from "../shared/modes"
 import { truncateConversationIfNeeded } from "./sliding-window"
-import { ClineProvider, GlobalFileNames } from "./webview/ClineProvider"
+import { ClineProvider } from "./webview/ClineProvider"
 import { detectCodeOmission } from "../integrations/editor/detect-omission"
 import { BrowserSession } from "../services/browser/BrowserSession"
-import { OpenRouterHandler } from "../api/providers/openrouter"
 import { McpHub } from "../services/mcp/McpHub"
 import crypto from "crypto"
 import { insertGroups } from "./diff/insert-groups"
 import { EXPERIMENT_IDS, experiments as Experiments, ExperimentId } from "../shared/experiments"
+import {
+	trackFileCreated,
+	trackFileModified,
+	trackCommandExecuted,
+	trackBrowserSession,
+	trackApiCall,
+	trackTaskCompleted,
+	trackToolUsage,
+} from "../utils/metrics"
 
 const cwd =
 	vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath).at(0) ?? path.join(os.homedir(), "Desktop") // may or may not exist but fs checking existence would immediately ask for permission which would be bad UX, need to come up with a better solution
 
 type ToolResponse = string | Array<Anthropic.TextBlockParam | Anthropic.ImageBlockParam>
-type UserContent = Array<
-	Anthropic.TextBlockParam | Anthropic.ImageBlockParam | Anthropic.ToolUseBlockParam | Anthropic.ToolResultBlockParam
->
+type UserContent = Array<Anthropic.Messages.ContentBlockParam>
 
 export type ClineOptions = {
 	provider: ClineProvider
@@ -82,6 +89,7 @@ export type ClineOptions = {
 	fuzzyMatchThreshold?: number
 	task?: string
 	images?: string[]
+	enableMetrics?: boolean
 	historyItem?: HistoryItem
 	experiments?: Record<string, boolean>
 	startTask?: boolean
@@ -89,6 +97,7 @@ export type ClineOptions = {
 
 export class Cline {
 	readonly taskId: string
+	readonly apiConfiguration: ApiConfiguration
 	api: ApiHandler
 	private terminalManager: TerminalManager
 	private urlContentFetcher: UrlContentFetcher
@@ -97,6 +106,7 @@ export class Cline {
 	customInstructions?: string
 	diffStrategy?: DiffStrategy
 	diffEnabled: boolean = false
+	metricsEnabled: boolean = false // Default to false and let constructor set based on actual state
 	fuzzyMatchThreshold: number = 1.0
 
 	apiConversationHistory: (Anthropic.MessageParam & { ts?: number })[] = []
@@ -116,7 +126,7 @@ export class Cline {
 	isInitialized = false
 
 	// checkpoints
-	checkpointsEnabled: boolean = false
+	enableCheckpoints: boolean = false
 	private checkpointService?: CheckpointService
 
 	// streaming
@@ -138,6 +148,7 @@ export class Cline {
 		customInstructions,
 		enableDiff,
 		enableCheckpoints,
+		enableMetrics,
 		fuzzyMatchThreshold,
 		task,
 		images,
@@ -149,7 +160,9 @@ export class Cline {
 			throw new Error("Either historyItem or task/images must be provided")
 		}
 
-		this.taskId = crypto.randomUUID()
+		this.taskId = historyItem ? historyItem.id : crypto.randomUUID()
+
+		this.apiConfiguration = apiConfiguration
 		this.api = buildApiHandler(apiConfiguration)
 		this.terminalManager = new TerminalManager()
 		this.urlContentFetcher = new UrlContentFetcher(provider.context)
@@ -157,13 +170,11 @@ export class Cline {
 		this.customInstructions = customInstructions
 		this.diffEnabled = enableDiff ?? false
 		this.fuzzyMatchThreshold = fuzzyMatchThreshold ?? 1.0
+		provider.log(`Setting metricsEnabled to ${enableMetrics ?? false} in Cline constructor`)
+		this.metricsEnabled = enableMetrics ?? false // Changed to false to ensure we only enable when explicitly set
 		this.providerRef = new WeakRef(provider)
 		this.diffViewProvider = new DiffViewProvider(cwd)
-		this.checkpointsEnabled = enableCheckpoints ?? false
-
-		if (historyItem) {
-			this.taskId = historyItem.id
-		}
+		this.enableCheckpoints = enableCheckpoints ?? false
 
 		// Initialize diffStrategy based on current state
 		this.updateDiffStrategy(Experiments.isEnabled(experiments ?? {}, EXPERIMENT_IDS.DIFF_STRATEGY))
@@ -235,6 +246,53 @@ export class Cline {
 	async overwriteApiConversationHistory(newHistory: Anthropic.MessageParam[]) {
 		this.apiConversationHistory = newHistory
 		await this.saveApiConversationHistory()
+	}
+
+	/**
+	 * Helper method to track metrics only when enabled
+	 * This method will check if metrics tracking is enabled and update metrics through the provider
+	 */
+	private async trackMetrics<T>(action: (metrics: any) => T): Promise<T | void> {
+		// Skip if metrics are disabled at the class level
+		// Log the current state of the metrics tracking flag
+		this.providerRef.deref()?.log(`Metrics tracking class-level flag: ${this.metricsEnabled}`)
+
+		this.providerRef.deref()?.log("Attempting to track metrics")
+
+		// Get provider instance
+		const provider = this.providerRef.deref()
+		if (!provider) {
+			this.providerRef.deref()?.log("Metrics tracking skipped - provider not available")
+			return
+		}
+
+		// Check if metrics are enabled in settings and update metrics
+		const { usageMetricsEnabled, usageMetrics } = await provider.getState()
+		this.providerRef
+			.deref()
+			?.log(`Metrics state: enabled=${usageMetricsEnabled}, metrics=${usageMetrics ? "exists" : "null"}`)
+
+		// Synchronize the class-level property with the current settings value
+		if (this.metricsEnabled !== usageMetricsEnabled) {
+			this.providerRef
+				.deref()
+				?.log(`Updating class-level metricsEnabled from ${this.metricsEnabled} to ${usageMetricsEnabled}`)
+			this.metricsEnabled = usageMetricsEnabled ?? true
+		}
+
+		if (!usageMetricsEnabled) {
+			this.providerRef.deref()?.log("Metrics tracking skipped - disabled in settings")
+			return
+		}
+		if (usageMetrics) {
+			this.providerRef.deref()?.log("Metrics tracking enabled, updating metrics")
+			const updatedMetrics = action(usageMetrics)
+			this.providerRef.deref()?.log(`Updated metrics: ${JSON.stringify(updatedMetrics)}`)
+			return await provider.updateMetrics(updatedMetrics)
+		} else {
+			this.providerRef.deref()?.log("Metrics tracking skipped - no existing metrics object")
+			return
+		}
 	}
 
 	private async saveApiConversationHistory() {
@@ -733,7 +791,7 @@ export class Cline {
 			text:
 				`[TASK RESUMPTION] This task was interrupted ${agoText}. It may or may not be complete, so please reassess the task context. Be aware that the project state may have changed since then. The current working directory is now '${cwd.toPosix()}'. If the task has not been completed, retry the last step before interruption and proceed with completing the task.\n\nNote: If you previously attempted a tool use that the user did not provide a result for, you should assume the tool use was not successful and assess whether you should retry. If the last tool was a browser_action, the browser has been closed and you must launch a new browser if needed.${
 					wasRecent
-						? "\n\nIMPORTANT: If the last tool use was a create_file that was interrupted, the file was reverted back to its original state before the interrupted edit, and you do NOT need to re-read the file as you already have its up-to-date contents."
+						? "\n\nIMPORTANT: If the last tool use was a write_to_file that was interrupted, the file was reverted back to its original state before the interrupted edit, and you do NOT need to re-read the file as you already have its up-to-date contents."
 						: ""
 				}` +
 				(responseText
@@ -834,8 +892,19 @@ export class Cline {
 		})
 
 		let completed = false
-		process.once("completed", () => {
+		let exitDetails: ExitCodeDetails | undefined
+		process.once("completed", (output?: string) => {
+			// Use provided output if available, otherwise keep existing result.
+			if (output) {
+				lines = output.split("\n")
+			}
 			completed = true
+		})
+
+		process.once("shell_execution_complete", (id: number, details: ExitCodeDetails) => {
+			if (id === terminalInfo.id) {
+				exitDetails = details
+			}
 		})
 
 		process.once("no_shell_integration", async () => {
@@ -869,7 +938,18 @@ export class Cline {
 		}
 
 		if (completed) {
-			return [false, `Command executed.${result.length > 0 ? `\nOutput:\n${result}` : ""}`]
+			let exitStatus = "No exit code available"
+			if (exitDetails !== undefined) {
+				if (exitDetails.signal) {
+					exitStatus = `Process terminated by signal ${exitDetails.signal} (${exitDetails.signalName})`
+					if (exitDetails.coreDumpPossible) {
+						exitStatus += " - core dump possible"
+					}
+				} else {
+					exitStatus = `Exit code: ${exitDetails.exitCode}`
+				}
+			}
+			return [false, `Command executed. ${exitStatus}${result.length > 0 ? `\nOutput:\n${result}` : ""}`]
 		} else {
 			return [
 				false,
@@ -963,13 +1043,21 @@ export class Cline {
 				cacheWrites = 0,
 				cacheReads = 0,
 			}: ClineApiReqInfo = JSON.parse(previousRequest)
+
 			const totalTokens = tokensIn + tokensOut + cacheWrites + cacheReads
 
-			const trimmedMessages = truncateConversationIfNeeded(
-				this.apiConversationHistory,
+			const modelInfo = this.api.getModel().info
+			const maxTokens = modelInfo.thinking
+				? this.apiConfiguration.modelMaxTokens || modelInfo.maxTokens
+				: modelInfo.maxTokens
+			const contextWindow = modelInfo.contextWindow
+			const trimmedMessages = await truncateConversationIfNeeded({
+				messages: this.apiConversationHistory,
 				totalTokens,
-				this.api.getModel().info,
-			)
+				maxTokens,
+				contextWindow,
+				apiHandler: this.api,
+			})
 
 			if (trimmedMessages !== this.apiConversationHistory) {
 				await this.overwriteApiConversationHistory(trimmedMessages)
@@ -1012,7 +1100,7 @@ export class Cline {
 		} catch (error) {
 			// note that this api_req_failed ask is unique in that we only present this option if the api hasn't streamed any content yet (ie it fails on the first chunk due), as it would allow them to hit a retry button. However if the api failed mid-stream, it could be in any arbitrary state where some tools may have executed, so that error is handled differently and requires cancelling the task entirely.
 			if (alwaysApproveResubmit) {
-				const errorMsg = error.message ?? "Unknown error"
+				const errorMsg = error.error?.metadata?.raw ?? error.message ?? "Unknown error"
 				const baseDelay = requestDelaySeconds || 5
 				const exponentialDelay = Math.ceil(baseDelay * Math.pow(2, retryAttempt))
 				// Wait for the greater of the exponential delay or the rate limit delay
@@ -1141,9 +1229,9 @@ export class Cline {
 							return `[${block.name} for '${block.params.command}']`
 						case "read_file":
 							return `[${block.name} for '${block.params.path}']`
-						case "create_file":
+						case "write_to_file":
 							return `[${block.name} for '${block.params.path}']`
-						case "edit_file":
+						case "apply_diff":
 							return `[${block.name} for '${block.params.path}']`
 						case "search_files":
 							return `[${block.name} for '${block.params.regex}'${
@@ -1295,7 +1383,7 @@ export class Cline {
 						mode ?? defaultModeSlug,
 						customModes ?? [],
 						{
-							edit_file: this.diffEnabled,
+							apply_diff: this.diffEnabled,
 						},
 						block.params,
 					)
@@ -1306,7 +1394,7 @@ export class Cline {
 				}
 
 				switch (block.name) {
-					case "create_file": {
+					case "write_to_file": {
 						const relPath: string | undefined = block.params.path
 						let newContent: string | undefined = block.params.content
 						let predictedLineCount: number | undefined = parseInt(block.params.line_count ?? "0")
@@ -1371,25 +1459,28 @@ export class Cline {
 							} else {
 								if (!relPath) {
 									this.consecutiveMistakeCount++
-									pushToolResult(await this.sayAndCreateMissingParamError("create_file", "path"))
+									pushToolResult(await this.sayAndCreateMissingParamError("write_to_file", "path"))
 									await this.diffViewProvider.reset()
 									break
 								}
 								if (!newContent) {
 									this.consecutiveMistakeCount++
-									pushToolResult(await this.sayAndCreateMissingParamError("create_file", "content"))
+									pushToolResult(await this.sayAndCreateMissingParamError("write_to_file", "content"))
 									await this.diffViewProvider.reset()
 									break
 								}
 								if (!predictedLineCount) {
 									this.consecutiveMistakeCount++
 									pushToolResult(
-										await this.sayAndCreateMissingParamError("create_file", "line_count"),
+										await this.sayAndCreateMissingParamError("write_to_file", "line_count"),
 									)
 									await this.diffViewProvider.reset()
 									break
 								}
 								this.consecutiveMistakeCount = 0
+
+								// Track file creation metrics
+								await this.trackMetrics((metrics) => trackFileCreated(metrics, relPath, newContent))
 
 								// if isEditingFile false, that means we have the full contents of the file already.
 								// it's important to note how this function works, you can't make the assumption that the block.partial conditional will always be called since it may immediately get complete, non-partial data. So this part of the logic will always be called.
@@ -1421,7 +1512,7 @@ export class Cline {
 											formatResponse.toolError(
 												`Content appears to be truncated (file has ${
 													newContent.split("\n").length
-												} lines but was predicted to have ${predictedLineCount} lines), and found comments indicating omitted code (e.g., '// rest of code unchanged', '/* previous code */'). Please provide the complete file content without any omissions if possible, or otherwise use the 'edit_file' tool to apply the diff to the original file.`,
+												} lines but was predicted to have ${predictedLineCount} lines), and found comments indicating omitted code (e.g., '// rest of code unchanged', '/* previous code */'). Please provide the complete file content without any omissions if possible, or otherwise use the 'apply_diff' tool to apply the diff to the original file.`,
 											),
 										)
 										break
@@ -1497,7 +1588,7 @@ export class Cline {
 							break
 						}
 					}
-					case "edit_file": {
+					case "apply_diff": {
 						const relPath: string | undefined = block.params.path
 						const diffContent: string | undefined = block.params.diff
 
@@ -1515,12 +1606,12 @@ export class Cline {
 							} else {
 								if (!relPath) {
 									this.consecutiveMistakeCount++
-									pushToolResult(await this.sayAndCreateMissingParamError("edit_file", "path"))
+									pushToolResult(await this.sayAndCreateMissingParamError("apply_diff", "path"))
 									break
 								}
 								if (!diffContent) {
 									this.consecutiveMistakeCount++
-									pushToolResult(await this.sayAndCreateMissingParamError("edit_file", "diff"))
+									pushToolResult(await this.sayAndCreateMissingParamError("apply_diff", "diff"))
 									break
 								}
 
@@ -1567,6 +1658,9 @@ export class Cline {
 
 								this.consecutiveMistakeCount = 0
 								this.consecutiveMistakeCountForApplyDiff.delete(relPath)
+								// Track file modification metrics
+								await this.trackMetrics((metrics) => trackFileModified(metrics, relPath, diffContent))
+
 								// Show diff view before asking for approval
 								this.diffViewProvider.editType = "modify"
 								await this.diffViewProvider.open(relPath)
@@ -2169,6 +2263,9 @@ export class Cline {
 									await this.browserSession.launchBrowser()
 									browserActionResult = await this.browserSession.navigateToUrl(url)
 								} else {
+									// Track browser session metrics
+									await this.trackMetrics((metrics) => trackBrowserSession(metrics))
+
 									if (action === "click") {
 										if (!coordinate) {
 											this.consecutiveMistakeCount++
@@ -2233,7 +2330,7 @@ export class Cline {
 											formatResponse.toolResult(
 												`The browser action has been executed. The console logs and screenshot have been captured for your analysis.\n\nConsole logs:\n${
 													browserActionResult.logs || "(No new logs)"
-												}\n\n(REMEMBER: if you need to proceed to using non-\`browser_action\` tools or launch a new browser, you MUST first close this browser. For example, if after analyzing the logs and screenshot you need to edit a file, you must first close the browser before you can use the create_file tool.)`,
+												}\n\n(REMEMBER: if you need to proceed to using non-\`browser_action\` tools or launch a new browser, you MUST first close this browser. For example, if after analyzing the logs and screenshot you need to edit a file, you must first close the browser before you can use the write_to_file tool.)`,
 												browserActionResult.screenshot ? [browserActionResult.screenshot] : [],
 											),
 										)
@@ -2276,6 +2373,9 @@ export class Cline {
 								if (!didApprove) {
 									break
 								}
+
+								// Track command execution metrics
+								await this.trackMetrics((metrics) => trackCommandExecuted(metrics, command))
 								const [userRejected, result] = await this.executeCommandTool(command)
 								if (userRejected) {
 									this.didRejectTool = true
@@ -2376,6 +2476,9 @@ export class Cline {
 											.filter(Boolean)
 											.join("\n\n") || "(No response)"
 								await this.say("mcp_server_response", toolResultPretty)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, `mcp_${tool_name}`))
 								pushToolResult(formatResponse.toolResult(toolResultPretty))
 								break
 							}
@@ -2438,6 +2541,11 @@ export class Cline {
 										.filter(Boolean)
 										.join("\n\n") || "(Empty response)"
 								await this.say("mcp_server_response", resourceResultPretty)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) =>
+									trackToolUsage(metrics, `mcp_resource_${server_name}`),
+								)
 								pushToolResult(formatResponse.toolResult(resourceResultPretty))
 								break
 							}
@@ -2464,6 +2572,9 @@ export class Cline {
 								}
 								this.consecutiveMistakeCount = 0
 								const { text, images } = await this.ask("followup", question, false)
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, "ask_followup_question"))
 								await this.say("user_feedback", text ?? "", images)
 								pushToolResult(formatResponse.toolResult(`<answer>\n${text}\n</answer>`, images))
 								break
@@ -2527,6 +2638,9 @@ export class Cline {
 								if (provider) {
 									await provider.handleModeSwitch(mode_slug)
 								}
+
+								// Track tool usage metrics
+								await this.trackMetrics((metrics) => trackToolUsage(metrics, "switch_mode"))
 								pushToolResult(
 									`Successfully switched from ${getModeBySlug(currentMode)?.name ?? currentMode} mode to ${
 										targetMode.name
@@ -2596,6 +2710,9 @@ export class Cline {
 									pushToolResult(
 										`Successfully created new task in ${targetMode.name} mode with message: ${message}`,
 									)
+
+									// Track task completion metrics
+									await this.trackMetrics((metrics) => trackTaskCompleted(metrics, this.taskId))
 								} else {
 									pushToolResult(
 										formatResponse.toolError("Failed to create new task: provider not available"),
@@ -2750,7 +2867,7 @@ export class Cline {
 
 		/*
 		Seeing out of bounds is fine, it means that the next too call is being built up and ready to add to assistantMessageContent to present.
-		When you see the UI inactive during this, it means that a tool is breaking without presenting any UI. For example the create_file tool was breaking when relpath was undefined, and for invalid relpath it never presented UI.
+		When you see the UI inactive during this, it means that a tool is breaking without presenting any UI. For example the write_to_file tool was breaking when relpath was undefined, and for invalid relpath it never presented UI.
 		*/
 		this.presentAssistantMessageLocked = false // this needs to be placed here, if not then calling this.presentAssistantMessage below would fail (sometimes) since it's locked
 		// NOTE: when tool is rejected, iterator stream is interrupted and it waits for userMessageContentReady to be true. Future calls to present will skip execution since didRejectTool and iterate until contentIndex is set to message length and it sets userMessageContentReady to true itself (instead of preemptively doing it in iterator)
@@ -2792,7 +2909,7 @@ export class Cline {
 				"mistake_limit_reached",
 				this.api.getModel().id.includes("claude")
 					? `This may indicate a failure in his thought process or inability to use a tool properly, which can be mitigated with some user guidance (e.g. "Try breaking down the task into smaller steps").`
-					: "Roo Code uses complex prompts and iterative task execution that may be challenging for less capable models. For best results, it's recommended to use Claude 3.5 Sonnet for its advanced agentic coding capabilities.",
+					: "Roo Code uses complex prompts and iterative task execution that may be challenging for less capable models. For best results, it's recommended to use Claude 3.7 Sonnet for its advanced agentic coding capabilities.",
 			)
 			if (response === "messageResponse") {
 				userContent.push(
@@ -3026,6 +3143,11 @@ export class Cline {
 			updateApiReqMsg()
 			await this.saveClineMessages()
 			await this.providerRef.deref()?.postStateToWebview()
+
+			// Track API call metrics
+			await this.trackMetrics((metrics) =>
+				trackApiCall(metrics, this.api.getModel().id, totalCost || 0, this.taskId),
+			)
 
 			// now add to apiconversationhistory
 			// need to save assistant responses to file before proceeding to tool use since user can exit at any moment and we wouldn't be able to save the assistant's response
@@ -3300,14 +3422,14 @@ export class Cline {
 
 		// Add warning if not in code mode
 		if (
-			!isToolAllowedForMode("create_file", currentMode, customModes ?? [], {
-				edit_file: this.diffEnabled,
+			!isToolAllowedForMode("write_to_file", currentMode, customModes ?? [], {
+				apply_diff: this.diffEnabled,
 			}) &&
-			!isToolAllowedForMode("edit_file", currentMode, customModes ?? [], { edit_file: this.diffEnabled })
+			!isToolAllowedForMode("apply_diff", currentMode, customModes ?? [], { apply_diff: this.diffEnabled })
 		) {
 			const currentModeName = getModeBySlug(currentMode, customModes)?.name ?? currentMode
 			const defaultModeName = getModeBySlug(defaultModeSlug, customModes)?.name ?? defaultModeSlug
-			details += `\n\nNOTE: You are currently in '${currentModeName}' mode which only allows read-only operations. To write files or execute commands, the user will need to switch to '${defaultModeName}' mode. Note that only the user can switch modes.`
+			details += `\n\nNOTE: You are currently in '${currentModeName}' mode, which does not allow write operations. To write files, the user will need to switch to a mode that supports file writing, such as '${defaultModeName}' mode.`
 		}
 
 		if (includeFileDetails) {
@@ -3329,7 +3451,7 @@ export class Cline {
 	// Checkpoints
 
 	private async getCheckpointService() {
-		if (!this.checkpointsEnabled) {
+		if (!this.enableCheckpoints) {
 			throw new Error("Checkpoints are disabled")
 		}
 
@@ -3370,7 +3492,7 @@ export class Cline {
 		commitHash: string
 		mode: "full" | "checkpoint"
 	}) {
-		if (!this.checkpointsEnabled) {
+		if (!this.enableCheckpoints) {
 			return
 		}
 
@@ -3409,12 +3531,12 @@ export class Cline {
 			)
 		} catch (err) {
 			this.providerRef.deref()?.log("[checkpointDiff] disabling checkpoints for this task")
-			this.checkpointsEnabled = false
+			this.enableCheckpoints = false
 		}
 	}
 
 	public async checkpointSave({ isFirst }: { isFirst: boolean }) {
-		if (!this.checkpointsEnabled) {
+		if (!this.enableCheckpoints) {
 			return
 		}
 
@@ -3435,7 +3557,7 @@ export class Cline {
 			}
 		} catch (err) {
 			this.providerRef.deref()?.log("[checkpointSave] disabling checkpoints for this task")
-			this.checkpointsEnabled = false
+			this.enableCheckpoints = false
 		}
 	}
 
@@ -3448,7 +3570,7 @@ export class Cline {
 		commitHash: string
 		mode: "preview" | "restore"
 	}) {
-		if (!this.checkpointsEnabled) {
+		if (!this.enableCheckpoints) {
 			return
 		}
 
@@ -3503,7 +3625,7 @@ export class Cline {
 			this.providerRef.deref()?.cancelTask()
 		} catch (err) {
 			this.providerRef.deref()?.log("[checkpointRestore] disabling checkpoints for this task")
-			this.checkpointsEnabled = false
+			this.enableCheckpoints = false
 		}
 	}
 }
