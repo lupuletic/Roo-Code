@@ -27,11 +27,6 @@ interface HistoricalMetrics {
 	manual: CodeMetrics
 }
 
-// Interface for metrics data with history
-interface MetricsDataWithHistory extends MetricsData {
-	history: HistoricalMetrics[]
-}
-
 const CodeMetricsPanel: React.FC = () => {
 	const { t } = useTranslation("metrics")
 	const [metrics, setMetrics] = useState<MetricsData | null>(null)
