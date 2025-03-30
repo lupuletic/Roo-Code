@@ -29,6 +29,7 @@ jest.mock("react-i18next", () => ({
 				totalManualFiles: "Total Manual File Changes",
 				lastUpdated: "Last Updated",
 				loading: "Loading metrics...",
+				trends: "Trends",
 				error: "Error loading metrics",
 				retry: "Retry",
 			}
@@ -72,6 +73,26 @@ describe("CodeMetricsPanel", () => {
 			lastUpdated: Date.now(),
 		},
 	}
+	
+	const mockHistoricalData = [
+		{
+			timestamp: Date.now() - 7 * 24 * 60 * 60 * 1000, // 7 days ago
+			aiGenerated: {
+				linesAdded: 5,
+				linesDeleted: 0,
+				filesModified: 1,
+				filesCreated: 0,
+				lastUpdated: Date.now() - 7 * 24 * 60 * 60 * 1000,
+			},
+			manual: {
+				linesAdded: 50,
+				linesDeleted: 2,
+				filesModified: 20,
+				filesCreated: 0,
+				lastUpdated: Date.now() - 7 * 24 * 60 * 60 * 1000,
+			},
+		}
+	]
 
 	beforeEach(() => {
 		jest.clearAllMocks()
@@ -87,6 +108,15 @@ describe("CodeMetricsPanel", () => {
 								type: "codeMetricsData",
 								metrics: mockMetricsData,
 							},
+						} as MessageEvent)
+					}
+				}, 0)
+				
+				// Simulate historical metrics data response
+				setTimeout(() => {
+					if (typeof cb === "function") {
+						cb({
+							data: { type: "codeMetricsHistoryData", history: mockHistoricalData },
 						} as MessageEvent)
 					}
 				}, 0)
@@ -142,6 +172,20 @@ describe("CodeMetricsPanel", () => {
 		if (comparisonTab) fireEvent.click(comparisonTab)
 		expect(screen.getByText("Line Changes Distribution")).toBeInTheDocument()
 	})
+	
+	it("switches to trends tab and displays historical data", async () => {
+		render(<CodeMetricsPanel />)
+
+		// Wait for metrics to load
+		await waitFor(() => {
+			expect(screen.getByText("Code Metrics")).toBeInTheDocument()
+		})
+
+		// Click on Trends tab
+		const trendsTab = Array.from(screen.getAllByRole("button")).find((button) => button.textContent === "Trends")
+		if (trendsTab) fireEvent.click(trendsTab)
+		expect(screen.getByText("Code Growth Over Time")).toBeInTheDocument()
+	})
 
 	it("renders new productivity metrics", async () => {
 		render(<CodeMetricsPanel />)
@@ -189,6 +233,17 @@ describe("CodeMetricsPanel", () => {
 			type: "getCodeMetrics",
 		})
 	})
+	
+	it("fetches historical metrics on mount", () => {
+		render(<CodeMetricsPanel />)
+
+		// Check if postMessage was called with getCodeMetricsHistory
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "getCodeMetricsHistory",
+		})
+	})
+	
+	
 
 	it("refreshes metrics when refresh button is clicked", async () => {
 		render(<CodeMetricsPanel />)

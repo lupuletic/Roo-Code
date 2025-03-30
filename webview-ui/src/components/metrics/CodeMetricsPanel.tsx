@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useState, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { vscode } from "../../utils/vscode"
 import { Button } from "../ui/button"
@@ -20,17 +20,38 @@ interface MetricsData {
 	manual: CodeMetrics
 }
 
+// Interface for historical metrics data
+interface HistoricalMetrics {
+	timestamp: number
+	aiGenerated: CodeMetrics
+	manual: CodeMetrics
+}
+
+// Interface for metrics data with history
+interface MetricsDataWithHistory extends MetricsData {
+	history: HistoricalMetrics[]
+}
+
 const CodeMetricsPanel: React.FC = () => {
 	const { t } = useTranslation("metrics")
 	const [metrics, setMetrics] = useState<MetricsData | null>(null)
-	const [activeTab, setActiveTab] = useState<"aiGenerated" | "manual" | "comparison">("aiGenerated")
+	const [metricsHistory, setMetricsHistory] = useState<HistoricalMetrics[]>([])
+	const [activeTab, setActiveTab] = useState<"aiGenerated" | "manual" | "comparison" | "trends">("aiGenerated")
 	const [loading, setLoading] = useState<boolean>(true)
+	const [timeRange, setTimeRange] = useState<"7days" | "30days" | "all">("7days")
 
 	// Fetch metrics from the extension
 	const fetchMetrics = () => {
 		setLoading(true)
 		vscode.postMessage({
 			type: "getCodeMetrics",
+		} as WebviewMessage)
+	}
+
+	// Fetch historical metrics from the extension
+	const fetchHistoricalMetrics = () => {
+		vscode.postMessage({
+			type: "getCodeMetricsHistory",
 		} as WebviewMessage)
 	}
 
@@ -42,11 +63,13 @@ const CodeMetricsPanel: React.FC = () => {
 		} as WebviewMessage)
 		// Fetch updated metrics after reset
 		setTimeout(fetchMetrics, 500)
+		setTimeout(fetchHistoricalMetrics, 1000)
 	}
 
 	useEffect(() => {
 		// Initial fetch
 		fetchMetrics()
+		fetchHistoricalMetrics()
 
 		// Listen for metrics data from extension
 		const messageHandler = (event: MessageEvent) => {
@@ -54,25 +77,48 @@ const CodeMetricsPanel: React.FC = () => {
 			if (message.type === "codeMetricsData") {
 				setMetrics(message.metrics)
 				setLoading(false)
+			} else if (message.type === "codeMetricsHistoryData") {
+				setMetricsHistory(message.history || [])
 			}
 		}
 
 		window.addEventListener("message", messageHandler)
 
 		// Set up periodic refresh every 5 minutes
-		const interval = setInterval(fetchMetrics, 60 * 1000) // Changed to 1 minute for more frequent updates
+		const interval = setInterval(() => {
+			fetchMetrics()
+			if (activeTab === "trends") {
+				fetchHistoricalMetrics()
+			}
+		}, 60 * 1000) // Changed to 1 minute for more frequent updates
 
 		return () => {
 			window.removeEventListener("message", messageHandler)
 			clearInterval(interval)
 		}
-	}, [])
+	}, [activeTab])
 
 	// Format last updated date
 	const formatDate = (timestamp: number) => {
 		if (!timestamp) return "Never"
 		return new Date(timestamp).toLocaleString()
 	}
+
+	// Filter historical data based on selected time range
+	const filteredHistory = useMemo(() => {
+		if (!metricsHistory.length) return []
+		
+		const now = Date.now()
+		const msPerDay = 24 * 60 * 60 * 1000
+		
+		if (timeRange === "7days") {
+			return metricsHistory.filter(entry => (now - entry.timestamp) <= 7 * msPerDay)
+		} else if (timeRange === "30days") {
+			return metricsHistory.filter(entry => (now - entry.timestamp) <= 30 * msPerDay)
+		}
+		
+		return metricsHistory
+	}, [metricsHistory, timeRange])
 
 	if (loading) {
 		return (
@@ -137,6 +183,14 @@ const CodeMetricsPanel: React.FC = () => {
 					onClick={() => setActiveTab("comparison")}>
 					{t("comparison")}
 				</button>
+				<button
+					className={`px-4 py-2 font-medium transition-colors ${activeTab === "trends" ? "border-b-2 border-vscode-charts-orange text-vscode-foreground" : "text-vscode-descriptionForeground hover:text-vscode-foreground"}`}
+					onClick={() => {
+						setActiveTab("trends")
+						fetchHistoricalMetrics()
+					}}>
+					{t("trends")}
+				</button>
 				<div className="flex-grow border-b border-vscode-panel-border"></div>
 			</div>
 
@@ -146,6 +200,15 @@ const CodeMetricsPanel: React.FC = () => {
 
 			{activeTab === "comparison" && (
 				<ComparisonView aiMetrics={metrics.aiGenerated} manualMetrics={metrics.manual} />
+			)}
+
+			{activeTab === "trends" && (
+				<TrendsView 
+					history={filteredHistory} 
+					currentMetrics={metrics} 
+					timeRange={timeRange}
+					onTimeRangeChange={setTimeRange}
+				/>
 			)}
 
 			<div className="text-xs text-vscode-descriptionForeground mt-8">
@@ -359,6 +422,246 @@ const ComparisonView: React.FC<{
 					<div className="text-3xl font-bold mb-4">{manualTotalLines.toLocaleString()}</div>
 					<div className="text-sm text-vscode-descriptionForeground mb-2">{t("totalFileChanges")}</div>
 					<div className="text-3xl font-bold">{manualTotalFiles.toLocaleString()}</div>
+				</div>
+			</div>
+		</div>
+	)
+}
+
+// New component for trends visualization
+const TrendsView: React.FC<{
+	history: HistoricalMetrics[]
+	currentMetrics: MetricsData
+	timeRange: "7days" | "30days" | "all"
+	onTimeRangeChange: (range: "7days" | "30days" | "all") => void
+}> = ({ history, currentMetrics, timeRange, onTimeRangeChange }) => {
+	const { t } = useTranslation("metrics")
+
+	// Format date for chart labels
+	const formatChartDate = (timestamp: number) => {
+		const date = new Date(timestamp)
+		return `${date.getMonth() + 1}/${date.getDate()}`
+	}
+
+	// If no historical data is available yet
+	if (history.length === 0) {
+		return (
+			<div className="rounded-lg bg-vscode-editorWidget-background p-6">
+				<h3 className="text-lg font-medium mb-6 text-vscode-foreground">{t("trends")}</h3>
+				<div className="text-center py-12">
+					<div className="text-vscode-descriptionForeground">{t("noHistoricalData")}</div>
+				</div>
+			</div>
+		)
+	}
+
+	// Sort history by timestamp
+	const sortedHistory = [...history].sort((a, b) => a.timestamp - b.timestamp)
+
+	// Calculate cumulative metrics for line changes over time
+	const lineChangesOverTime = sortedHistory.map((entry, index) => {
+		const aiNetLines = entry.aiGenerated.linesAdded - entry.aiGenerated.linesDeleted
+		const manualNetLines = entry.manual.linesAdded - entry.manual.linesDeleted
+		return {
+			date: formatChartDate(entry.timestamp),
+			timestamp: entry.timestamp,
+			aiNetLines,
+			manualNetLines,
+			totalNetLines: aiNetLines + manualNetLines
+		}
+	})
+
+	// Calculate productivity ratio over time
+	const productivityOverTime = sortedHistory.map((entry) => {
+		const aiTotalLines = entry.aiGenerated.linesAdded + entry.aiGenerated.linesDeleted
+		const manualTotalLines = entry.manual.linesAdded + entry.manual.linesDeleted
+		const ratio = manualTotalLines > 0 ? aiTotalLines / manualTotalLines : 0
+		return {
+			date: formatChartDate(entry.timestamp),
+			timestamp: entry.timestamp,
+			ratio: Math.round(ratio * 100) / 100
+		}
+	})
+
+	return (
+		<div className="rounded-lg bg-vscode-editorWidget-background">
+			<div className="flex justify-between items-center mb-6">
+				<h3 className="text-lg font-medium text-vscode-foreground">{t("trends")}</h3>
+				
+				{/* Time range selector */}
+				<div className="flex space-x-2 text-sm">
+					<span className="text-vscode-descriptionForeground mr-2">{t("timeRange")}:</span>
+					<button 
+						className={`px-2 py-1 rounded ${timeRange === "7days" ? "bg-vscode-button-background text-vscode-button-foreground" : "text-vscode-descriptionForeground hover:text-vscode-foreground"}`}
+						onClick={() => onTimeRangeChange("7days")}>
+						7 Days
+					</button>
+					<button 
+						className={`px-2 py-1 rounded ${timeRange === "30days" ? "bg-vscode-button-background text-vscode-button-foreground" : "text-vscode-descriptionForeground hover:text-vscode-foreground"}`}
+						onClick={() => onTimeRangeChange("30days")}>
+						30 Days
+					</button>
+					<button 
+						className={`px-2 py-1 rounded ${timeRange === "all" ? "bg-vscode-button-background text-vscode-button-foreground" : "text-vscode-descriptionForeground hover:text-vscode-foreground"}`}
+						onClick={() => onTimeRangeChange("all")}>
+						All Time
+					</button>
+				</div>
+			</div>
+
+			{/* Code Growth Over Time Chart */}
+			<div className="mb-8">
+				<h4 className="text-sm font-medium mb-4">{t("codeGrowthOverTime")}</h4>
+				<div className="h-64 relative">
+					{/* Chart container */}
+					<div className="absolute inset-0">
+						{/* Y-axis labels */}
+						<div className="absolute left-0 top-0 bottom-0 w-10 flex flex-col justify-between text-xs text-vscode-descriptionForeground">
+							<div>+</div>
+							<div>0</div>
+							<div>-</div>
+						</div>
+						
+						{/* Chart area */}
+						<div className="absolute left-10 right-0 top-0 bottom-0 border-l border-b border-vscode-panel-border">
+							{/* X-axis labels */}
+							<div className="absolute left-0 right-0 bottom-0 transform translate-y-4 flex justify-between text-xs text-vscode-descriptionForeground">
+								{lineChangesOverTime.map((point, i) => (
+									<div key={i} className="text-center" style={{ width: `${100 / lineChangesOverTime.length}%` }}>
+										{point.date}
+									</div>
+								))}
+							</div>
+							
+							{/* Zero line */}
+							<div className="absolute left-0 right-0 top-1/2 border-t border-vscode-panel-border opacity-50"></div>
+							
+							{/* Line chart for AI net lines */}
+							<svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+								<polyline
+									points={lineChangesOverTime.map((point, i) => {
+										const x = (i / (lineChangesOverTime.length - 1)) * 100
+										// Map values to y position (50% is the zero line)
+										const maxValue = Math.max(...lineChangesOverTime.map(p => Math.abs(p.aiNetLines)), 100)
+										const y = 50 - (point.aiNetLines / maxValue) * 45
+										return `${x}% ${y}%`
+									}).join(' ')}
+									fill="none"
+									stroke="var(--vscode-charts-green)"
+									strokeWidth="2"
+								/>
+							</svg>
+							
+							{/* Line chart for manual net lines */}
+							<svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+								<polyline
+									points={lineChangesOverTime.map((point, i) => {
+										const x = (i / (lineChangesOverTime.length - 1)) * 100
+										// Map values to y position (50% is the zero line)
+										const maxValue = Math.max(...lineChangesOverTime.map(p => Math.abs(p.manualNetLines)), 100)
+										const y = 50 - (point.manualNetLines / maxValue) * 45
+										return `${x}% ${y}%`
+									}).join(' ')}
+									fill="none"
+									stroke="var(--vscode-charts-blue)"
+									strokeWidth="2"
+								/>
+							</svg>
+						</div>
+					</div>
+				</div>
+				
+				{/* Chart legend */}
+				<div className="flex justify-center space-x-6 mt-8">
+					<div className="flex items-center">
+						<div className="w-4 h-4 rounded-full bg-vscode-charts-green mr-2"></div>
+						<span className="text-sm">{t("aiGenerated")}</span>
+					</div>
+					<div className="flex items-center">
+						<div className="w-4 h-4 rounded-full bg-vscode-charts-blue mr-2"></div>
+						<span className="text-sm">{t("manual")}</span>
+					</div>
+				</div>
+				<div className="text-xs text-vscode-descriptionForeground mt-2 text-center">
+					Shows net code growth (additions minus deletions) over time
+				</div>
+			</div>
+
+			{/* Productivity Trends Chart */}
+			<div className="mt-12 pt-8 border-t border-vscode-panel-border">
+				<h4 className="text-sm font-medium mb-4">{t("productivityTrends")}</h4>
+				<div className="h-48 relative">
+					{/* Chart container */}
+					<div className="absolute inset-0">
+						{/* Y-axis labels */}
+						<div className="absolute left-0 top-0 bottom-0 w-10 flex flex-col justify-between text-xs text-vscode-descriptionForeground">
+							<div>High</div>
+							<div>Low</div>
+						</div>
+						
+						{/* Chart area */}
+						<div className="absolute left-10 right-0 top-0 bottom-0 border-l border-b border-vscode-panel-border">
+							{/* X-axis labels */}
+							<div className="absolute left-0 right-0 bottom-0 transform translate-y-4 flex justify-between text-xs text-vscode-descriptionForeground">
+								{productivityOverTime.map((point, i) => (
+									<div key={i} className="text-center" style={{ width: `${100 / productivityOverTime.length}%` }}>
+										{point.date}
+									</div>
+								))}
+							</div>
+							
+							{/* Bar chart for productivity ratio */}
+							<div className="absolute inset-0 flex items-end">
+								{productivityOverTime.map((point, i) => {
+									const maxRatio = Math.max(...productivityOverTime.map(p => p.ratio), 1)
+									const height = (point.ratio / maxRatio) * 100
+									return (
+										<div 
+											key={i} 
+											className="bg-vscode-charts-orange h-0 transition-all duration-500"
+											style={{ 
+												width: `${100 / productivityOverTime.length}%`,
+												height: `${height}%`
+											}}
+										>
+											<Tooltip content={`${point.ratio}x`}>
+												<div className="w-full h-full"></div>
+											</Tooltip>
+										</div>
+									)
+								})}
+							</div>
+						</div>
+					</div>
+				</div>
+				<div className="text-xs text-vscode-descriptionForeground mt-6 text-center">
+					Shows the ratio of AI-generated code changes to manual code changes over time
+				</div>
+			</div>
+
+			{/* Summary metrics */}
+			<div className="grid grid-cols-2 gap-8 mt-12 pt-8 border-t border-vscode-panel-border">
+				<div>
+					<h4 className="text-sm font-medium mb-4">AI Contribution Growth</h4>
+					<div className="text-4xl font-bold text-vscode-charts-green">
+						{history.length > 1 ? 
+							`${Math.round(((currentMetrics.aiGenerated.linesAdded / Math.max(1, history[0].aiGenerated.linesAdded)) - 1) * 100)}%` : 
+							"N/A"}
+					</div>
+					<div className="text-xs text-vscode-descriptionForeground mt-2">
+						Growth in AI-generated code since first recorded metrics
+					</div>
+				</div>
+				<div>
+					<h4 className="text-sm font-medium mb-4">Current Productivity Boost</h4>
+					<div className="text-4xl font-bold text-vscode-charts-orange">
+						{productivityOverTime.length > 0 ? 
+							`${productivityOverTime[productivityOverTime.length - 1].ratio}x` : 
+							"0x"}
+					</div>
+					<div className="text-xs text-vscode-descriptionForeground mt-2">
+						Current ratio of AI-generated code changes to manual changes
+					</div>
 				</div>
 			</div>
 		</div>

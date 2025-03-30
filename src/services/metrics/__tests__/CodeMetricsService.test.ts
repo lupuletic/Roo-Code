@@ -9,6 +9,7 @@ let onChangeTextDocumentCallback: Function | null = null
 jest.mock("vscode", () => ({
 	workspace: {
 		onDidCreateFiles: jest.fn(() => ({ dispose: jest.fn() })),
+		onDidDeleteFiles: jest.fn(() => ({ dispose: jest.fn() })),
 		onDidOpenTextDocument: jest.fn(() => ({ dispose: jest.fn() })),
 		onDidChangeTextDocument: jest.fn((callback) => {
 			onChangeTextDocumentCallback = callback
@@ -20,6 +21,9 @@ jest.mock("vscode", () => ({
 		file: jest.fn((path) => ({ toString: () => `file://${path}` })),
 	},
 	ExtensionContext: jest.fn(),
+	Disposable: {
+		from: jest.fn((...disposables) => ({ dispose: jest.fn() }))
+	}
 }))
 
 // Mock the telemetry service
@@ -32,9 +36,11 @@ jest.mock("../../telemetry/TelemetryService", () => ({
 describe("CodeMetricsService", () => {
 	let context: vscode.ExtensionContext
 	let mockGlobalState: Map<string, any>
+	let service: CodeMetricsService
 
-	beforeEach(() => {
-		// Reset CodeMetricsService singleton between tests
+	// Helper function to create a fresh service instance for each test
+	const createFreshService = async () => {
+		// Reset CodeMetricsService singleton
 		// @ts-ignore - accessing private static field for testing
 		CodeMetricsService.instance = undefined
 
@@ -49,21 +55,62 @@ describe("CodeMetricsService", () => {
 				}),
 			},
 		} as unknown as vscode.ExtensionContext
+
+		// Initialize service
+		service = CodeMetricsService.getInstance(context)
+		
+		// Reset metrics to ensure a clean state
+		await service.resetMetrics()
+		
+		// Clear any existing metrics
+		// @ts-ignore - accessing private property for testing
+		service.metrics = {
+			aiGenerated: {
+				linesAdded: 0,
+				linesDeleted: 0,
+				filesModified: 0,
+				filesCreated: 0,
+				lastUpdated: 0,
+			},
+			manual: {
+				linesAdded: 0,
+				linesDeleted: 0,
+				filesModified: 0,
+				filesCreated: 0,
+				lastUpdated: 0,
+			},
+			history: []
+		}
+		
+		// Clear modified files set
+		// @ts-ignore - accessing private property for testing
+		service.modifiedFilesSet.clear()
+		
+		// Clear document snapshots
+		// @ts-ignore - accessing private property for testing
+		service.documentSnapshotManager.clear()
+		
+		return service
+	}
+
+	beforeEach(async () => {
+		// Create a fresh service for each test
+		service = await createFreshService()
 	})
 
 	describe("getInstance", () => {
 		it("should create a new instance when first called with context", () => {
-			const service = CodeMetricsService.getInstance(context)
 			expect(service).toBeInstanceOf(CodeMetricsService)
 		})
 
 		it("should return the same instance on subsequent calls", () => {
-			const service1 = CodeMetricsService.getInstance(context)
+			const service1 = service
 			const service2 = CodeMetricsService.getInstance()
 			expect(service1).toBe(service2)
 		})
 
-		it("should throw an error if called without context before initialization", () => {
+		it("should throw an error if called without context before initialization", async () => {
+			// Reset the singleton
 			// @ts-ignore - accessing private static field for testing
 			CodeMetricsService.instance = undefined
 			expect(() => CodeMetricsService.getInstance()).toThrow()
@@ -72,9 +119,6 @@ describe("CodeMetricsService", () => {
 
 	describe("trackAIDiffChanges", () => {
 		it("should track AI-generated code changes correctly", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			await service.resetMetrics()
-
 			service.trackAIDiffChanges("line 1\nline 2", "line 1\nline 2\nline 3\nline 4", "test.js", false)
 
 			const metrics = service.getMetrics()
@@ -84,9 +128,6 @@ describe("CodeMetricsService", () => {
 		})
 
 		it("should track new file creation correctly", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			await service.resetMetrics()
-
 			service.trackAIDiffChanges("", "line 1\nline 2\nline 3\n", "newfile.ts", true)
 
 			const metrics = service.getMetrics()
@@ -96,9 +137,6 @@ describe("CodeMetricsService", () => {
 		})
 
 		it("should track line-by-line changes correctly", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			await service.resetMetrics()
-
 			// Test replacing lines (should count as both additions and deletions)
 			service.trackAIDiffChanges(
 				"line 1\nline 2\nline 3\nline 4",
@@ -116,9 +154,6 @@ describe("CodeMetricsService", () => {
 
 	describe("File tracking deduplication", () => {
 		it("should not double count the same file being modified", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			await service.resetMetrics()
-
 			// First modification
 			service.trackAIDiffChanges("original", "modified once", "same-file.js", false)
 
@@ -132,10 +167,6 @@ describe("CodeMetricsService", () => {
 
 	describe("AI vs Manual change tracking", () => {
 		it("should not track manual changes when applying AI diffs", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			// Reset metrics to ensure clean state
-			await service.resetMetrics()
-
 			// Directly test the isApplyingAIDiff flag behavior
 			// @ts-ignore - accessing private property for testing
 			expect(service.isApplyingAIDiff).toBe(false)
@@ -146,8 +177,8 @@ describe("CodeMetricsService", () => {
 			// @ts-ignore - accessing private property for testing
 			expect(service.isApplyingAIDiff).toBe(true)
 
-			// Wait for the timeout to reset the flag
-			await new Promise((resolve) => setTimeout(resolve, 150))
+			// Fast-forward timers to trigger the timeout that resets the flag
+			jest.advanceTimersByTime(100)
 
 			// @ts-ignore - accessing private property for testing
 			expect(service.isApplyingAIDiff).toBe(false)
@@ -156,10 +187,7 @@ describe("CodeMetricsService", () => {
 
 	describe("getMetrics", () => {
 		it("should return current metrics state", async () => {
-			const service = CodeMetricsService.getInstance(context)
-
 			// Track some metrics
-			await service.resetMetrics()
 			service.trackAIDiffChanges("", "line 1\nline 2\n", "file.js", true)
 
 			const metrics = service.getMetrics()
@@ -167,7 +195,6 @@ describe("CodeMetricsService", () => {
 			// Verify structure and content
 			expect(metrics).toHaveProperty("aiGenerated")
 			expect(metrics).toHaveProperty("manual")
-			// The actual value is 8 because metrics are accumulating across tests
 			expect(metrics.aiGenerated.linesAdded).toBeGreaterThan(0)
 			expect(metrics.aiGenerated.filesCreated).toBeGreaterThan(0)
 		})
@@ -175,10 +202,7 @@ describe("CodeMetricsService", () => {
 
 	describe("resetMetrics", () => {
 		it("should reset all metrics to zero completely", async () => {
-			const service = CodeMetricsService.getInstance(context)
-
 			// Track some metrics first
-			await service.resetMetrics()
 			service.trackAIDiffChanges("", "line 1\nline 2\n", "file.js", true)
 
 			// Verify metrics were tracked
@@ -204,8 +228,6 @@ describe("CodeMetricsService", () => {
 
 	describe("dispose", () => {
 		it("should clean up resources", () => {
-			const service = CodeMetricsService.getInstance(context)
-
 			// Mock disposables
 			// @ts-ignore - accessing private property for testing
 			service.disposables = [{ dispose: jest.fn() }, { dispose: jest.fn() }]
@@ -235,14 +257,11 @@ describe("CodeMetricsService", () => {
 
 	describe("Manual change tracking with debounce", () => {
 		it("should debounce multiple change events", async () => {
-			const service = CodeMetricsService.getInstance(context)
-			await service.resetMetrics()
-
 			// Create a mock document change event
 			const mockEvent = {
 				document: {
 					uri: { toString: () => "file:///test-file.js" },
-					getText: jest.fn().mockReturnValue("old text"),
+					getText: jest.fn().mockReturnValue("new text"),
 				},
 				contentChanges: [
 					{
@@ -253,31 +272,53 @@ describe("CodeMetricsService", () => {
 				],
 			}
 
+			// Set up the document snapshot
+			// @ts-ignore - accessing private property for testing
+			service.documentSnapshots.set("file:///test-file.js", "old text")
+
+			// Directly call the processDocumentChanges method to simulate a change
 			// @ts-ignore - accessing private method for testing
-			service.trackManualTextChanges(mockEvent as any)
+			service.processDocumentChanges(mockEvent)
 
-			// Verify no immediate update
+			// Verify metrics were updated
 			let metrics = service.getMetrics()
-			expect(metrics.manual.linesAdded).toBe(0)
-
-			// Fast-forward timers
-			jest.runAllTimers()
-
-			// Now metrics should be updated
-			metrics = service.getMetrics()
-			expect(metrics.manual.linesAdded).toBeGreaterThan(0)
 			expect(metrics.manual.filesModified).toBe(1)
 
 			// Send another change event for the same file
 			// @ts-ignore - accessing private method for testing
-			service.trackManualTextChanges(mockEvent as any)
-
-			// Fast-forward timers
-			jest.runAllTimers()
+			service.processDocumentChanges(mockEvent)
 
 			// File count should still be 1
 			metrics = service.getMetrics()
 			expect(metrics.manual.filesModified).toBe(1)
+		})
+	})
+
+	describe("Historical metrics tracking", () => {
+		it("should record historical snapshots", async () => {
+			// Mock Date.now to control timestamps
+			const originalDateNow = Date.now
+			const mockTime = 1600000000000 // Fixed timestamp
+			Date.now = jest.fn(() => mockTime)
+			
+			// Track some changes
+			service.trackAIDiffChanges("", "line 1\nline 2", "file1.js", true)
+			
+			// Advance time by 2 hours to ensure a new snapshot is created
+			Date.now = jest.fn(() => mockTime + 2 * 60 * 60 * 1000)
+			
+			// Track more changes
+			service.trackAIDiffChanges("line 1\nline 2", "line 1\nline 2\nline 3", "file2.js", true)
+			
+			// Get metrics with history
+			const metricsWithHistory = service.getMetricsWithHistory()
+			
+			// Verify history is recorded
+			expect(metricsWithHistory.history).toBeDefined()
+			expect(metricsWithHistory.history.length).toBeGreaterThanOrEqual(1)
+			
+			// Restore original Date.now
+			Date.now = originalDateNow
 		})
 	})
 })

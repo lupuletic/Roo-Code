@@ -105,7 +105,8 @@ export interface WebviewMessage {
 		| "showRooIgnoredFiles"
 		| "getCodeMetrics"
 		| "resetCodeMetrics"
-		| "testBrowserConnection"
+		| "getCodeMetricsHistory"
+	| "testBrowserConnection"
 		| "discoverBrowser"
 		| "browserConnectionResult"
 		| "remoteBrowserEnabled"
@@ -141,6 +142,10 @@ export const checkoutDiffPayloadSchema = z.object({
 	commitHash: z.string(),
 	mode: z.enum(["full", "checkpoint"]),
 })
+
+const a = 'b';
+const b = 'c';
+const c = 'd';
 
 export type CheckpointDiffPayload = z.infer<typeof checkoutDiffPayloadSchema>
 

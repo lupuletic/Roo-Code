@@ -1,409 +1,535 @@
 import * as vscode from "vscode"
 import { telemetryService } from "../telemetry/TelemetryService"
-
-/**
- * Result of computing diff changes
- */
-interface DiffChanges {
-	additions: number
-	deletions: number
-}
-
-/**
- * Compute the number of line additions and deletions between two text contents
- */
-function getDiffChanges(originalContent: string, newContent: string): DiffChanges {
-	// Split content into lines and handle empty content
-	const originalLines = originalContent ? originalContent.split("\n") : []
-	const newLines = newContent ? newContent.split("\n") : []
-
-	// Count actual line changes by comparing line by line
-	let additions = 0
-	let deletions = 0
-
-	// Use a simple LCS-based diff approach
-	const maxLines = Math.max(originalLines.length, newLines.length)
-	let i = 0,
-		j = 0
-
-	while (i < originalLines.length || j < newLines.length) {
-		// If we've reached the end of either array, the remaining lines in the other are all changes
-		if (i >= originalLines.length) {
-			additions += newLines.length - j
-			break
-		}
-		if (j >= newLines.length) {
-			deletions += originalLines.length - i
-			break
-		}
-
-		// If lines are the same, move to next line in both arrays
-		if (originalLines[i] === newLines[j]) {
-			i++
-			j++
-		} else {
-			// Try to find the current original line in the remaining new lines
-			const nextMatchInNew = newLines.indexOf(originalLines[i], j)
-			// Try to find the current new line in the remaining original lines
-			const nextMatchInOriginal = originalLines.indexOf(newLines[j], i)
-
-			// Choose the closest match to minimize changes
-			if (nextMatchInNew !== -1 && (nextMatchInOriginal === -1 || nextMatchInNew - j < nextMatchInOriginal - i)) {
-				// Current original line found later in new content, so lines were added
-				additions += nextMatchInNew - j
-				j = nextMatchInNew
-			} else if (nextMatchInOriginal !== -1) {
-				// Current new line found later in original content, so lines were deleted
-				deletions += nextMatchInOriginal - i
-				i = nextMatchInOriginal
-			} else {
-				// No match found, count as both addition and deletion
-				additions++
-				deletions++
-				i++
-				j++
-			}
-		}
-	}
-
-	return { additions, deletions }
-}
-
-/**
- * Types of code change operations being tracked
- */
-export enum CodeChangeSource {
-	AI_GENERATED = "ai_generated",
-	MANUAL = "manual",
-}
-
-/**
- * Interface for code metrics data structure
- */
-export interface CodeMetrics {
-	linesAdded: number
-	linesDeleted: number
-	filesModified: number
-	filesCreated: number
-	lastUpdated: number
-}
-
-/**
- * Complete metrics data structure stored in global state
- */
-export interface MetricsData {
-	aiGenerated: CodeMetrics
-	manual: CodeMetrics
-}
-
-/**
- * Default empty metrics object
- */
-const emptyMetrics: CodeMetrics = {
-	linesAdded: 0,
-	linesDeleted: 0,
-	filesModified: 0,
-	filesCreated: 0,
-	lastUpdated: 0,
-}
-
-/**
- * Default metrics data
- */
-const defaultMetricsData: MetricsData = {
-	aiGenerated: { ...emptyMetrics },
-	manual: { ...emptyMetrics },
-}
-
-/**
- * Test constant for metrics service
- */
-export const test = "metrics_test_value"
+import { 
+    CodeChangeSource, 
+    CodeMetrics, 
+    HistoricalMetrics,
+    MetricsData,
+    MetricsDataWithHistory,
+    emptyMetrics,
+    defaultMetricsData,
+    defaultMetricsDataWithHistory
+} from "./types"
+import { getDiffChanges } from "./DiffCalculator"
+import { isSourceCodeFile, DocumentSnapshotManager } from "./FileUtils"
 
 /**
  * Service that tracks and reports code metrics for both AI-generated and manual changes
  */
 export class CodeMetricsService {
-	private static instance: CodeMetricsService
-	private context: vscode.ExtensionContext
-	private metrics: MetricsData = defaultMetricsData
-	private disposables: vscode.Disposable[] = []
-	private documentChangeListeners: Map<string, vscode.Disposable> = new Map()
-	private isApplyingAIDiff: boolean = false
-	private modifiedFilesSet: Set<string> = new Set()
-	private debounceTimers: Map<string, NodeJS.Timeout> = new Map()
-	private readonly DEBOUNCE_DELAY = 1000 // 1 second debounce
+    private static instance: CodeMetricsService
+    private context: vscode.ExtensionContext
+    private metrics: MetricsDataWithHistory = defaultMetricsDataWithHistory
+    private readonly MAX_HISTORY_ENTRIES = 30 // Store up to 30 historical entries
+    private disposables: vscode.Disposable[] = []
+    private documentChangeListeners: Map<string, vscode.Disposable> = new Map()
+    private isApplyingAIDiff: boolean = false
+    private modifiedFilesSet: Set<string> = new Set()
+    private debounceTimers: Map<string, NodeJS.Timeout> = new Map()
+    private readonly DEBOUNCE_DELAY = 1000 // 1 second debounce for batching changes
+    private readonly AI_FLAG_RESET_DELAY = 300 // 300ms delay to ensure AI changes are processed
+    private documentSnapshotManager: DocumentSnapshotManager = new DocumentSnapshotManager()
 
-	private constructor(context: vscode.ExtensionContext) {
-		this.context = context
-		this.initializeMetrics()
-		this.setupEventListeners()
-	}
+    private constructor(context: vscode.ExtensionContext) {
+        this.context = context
+        this.initializeMetrics()
+        this.setupEventListeners()
+    }
 
-	/**
-	 * Get the singleton instance of CodeMetricsService
-	 */
-	public static getInstance(context?: vscode.ExtensionContext): CodeMetricsService {
-		if (!CodeMetricsService.instance) {
-			if (!context) {
-				throw new Error("CodeMetricsService must be initialized with context first")
-			}
-			CodeMetricsService.instance = new CodeMetricsService(context)
-		}
-		return CodeMetricsService.instance
-	}
+    /**
+     * Get the singleton instance of CodeMetricsService
+     */
+    public static getInstance(context?: vscode.ExtensionContext): CodeMetricsService {
+        if (!CodeMetricsService.instance) {
+            if (!context) {
+                throw new Error("CodeMetricsService must be initialized with context first")
+            }
+            CodeMetricsService.instance = new CodeMetricsService(context)
+        }
+        return CodeMetricsService.instance
+    }
 
-	/**
-	 * Initialize metrics from global state or create default if not existing
-	 */
-	private async initializeMetrics(): Promise<void> {
-		const storedMetrics = this.context.globalState.get<MetricsData>("codeMetrics")
-		if (storedMetrics) {
-			this.metrics = storedMetrics
-		} else {
-			this.metrics = { ...defaultMetricsData }
-			await this.saveMetrics()
-		}
-	}
+    /**
+     * Initialize metrics from global state or create default if not existing
+     */
+    private async initializeMetrics(): Promise<void> {
+        try {
+            const storedMetrics = this.context.globalState.get<MetricsDataWithHistory>("codeMetrics")
+            if (storedMetrics) {
+                this.metrics = storedMetrics
+            } else {
+                this.metrics = { ...defaultMetricsDataWithHistory }
+                await this.saveMetrics()
+            }
+        } catch (error) {
+            console.error("Failed to initialize metrics:", error)
+            this.metrics = { ...defaultMetricsDataWithHistory }
+        }   
+    }
 
-	/**
-	 * Setup event listeners for tracking manual code changes
-	 */
-	private setupEventListeners(): void {
-		// Track file creation
-		this.disposables.push(
-			vscode.workspace.onDidCreateFiles((event) => {
-				this.trackManualFileCreation(event.files.length)
-			}),
-		)
+    /**
+     * Setup event listeners for tracking manual code changes
+     */
+    private setupEventListeners(): void {
+        // Track file creation
+        this.disposables.push(
+            vscode.workspace.onDidCreateFiles((event) => {
+                // Only count source code files
+                const sourceCodeFiles = event.files.filter(file => 
+                    isSourceCodeFile(file.fsPath)
+                )
+                if (sourceCodeFiles.length > 0) {
+                    this.trackManualFileCreation(sourceCodeFiles.length)
+                }
+            }),
+            vscode.workspace.onDidDeleteFiles((event) => {
+                this.trackManualFileDeletion(event.files)
+            }),
+        )
 
-		// Track text document changes
-		this.disposables.push(
-			vscode.workspace.onDidOpenTextDocument((doc) => {
-				this.setupDocumentChangeListener(doc)
-			}),
-		)
+        // Setup periodic cleanup timer for document snapshots
+        this.setupPeriodicCleanup()
 
-		// Setup listeners for already open documents
-		vscode.workspace.textDocuments.forEach((doc) => {
-			this.setupDocumentChangeListener(doc)
-		})
-	}
+        // Track text document changes
+        this.disposables.push(
+            vscode.workspace.onDidOpenTextDocument((doc) => {
+                this.documentSnapshotManager.storeSnapshot(doc)
+                this.setupDocumentChangeListener(doc)
+            }),
+        )
 
-	/**
-	 * Set up change listener for a specific document
-	 */
-	private setupDocumentChangeListener(doc: vscode.TextDocument): void {
-		// Only track source code files and avoid duplicating listeners
-		if (this.isSourceCodeFile(doc.fileName) && !this.documentChangeListeners.has(doc.fileName)) {
-			const disposable = vscode.workspace.onDidChangeTextDocument((event) => {
-				if (event.document.uri.toString() === doc.uri.toString()) {
-					this.trackManualTextChanges(event)
-				}
-			})
+        // Setup listeners for already open documents
+        vscode.workspace.textDocuments.forEach((doc) => {
+            this.documentSnapshotManager.storeSnapshot(doc)
+            this.setupDocumentChangeListener(doc)
+        })
+    }
 
-			this.documentChangeListeners.set(doc.fileName, disposable)
-			this.disposables.push(disposable)
-		}
-	}
+    /**
+     * Set up a periodic cleanup of document snapshots to prevent memory bloat
+     */
+    private setupPeriodicCleanup(): void {
+        // Run cleanup every hour
+        const cleanupInterval = 60 * 60 * 1000; // 1 hour in milliseconds
+        
+        const interval = setInterval(() => {
+            this.cleanupStaleSnapshots();
+        }, cleanupInterval);
+        
+        // Create a disposable for the interval
+        const disposable = {
+            dispose: () => {
+                clearInterval(interval);
+            }
+        };
+        
+        // Add to disposables for cleanup
+        this.disposables.push(disposable);
+    }
 
-	/**
-	 * Check if a file is a source code file (not a config, binary, etc)
-	 */
-	private isSourceCodeFile(fileName: string): boolean {
-		// Extensions to track
-		const codeExtensions = [
-			".ts",
-			".tsx",
-			".js",
-			".jsx",
-			".py",
-			".java",
-			".c",
-			".cpp",
-			".cs",
-			".go",
-			".rb",
-			".php",
-			".swift",
-			".kt",
-			".rs",
-			".html",
-			".css",
-			".scss",
-			".astro",
-		]
+    /**
+     * Set up change listener for a specific document
+     */
+    private setupDocumentChangeListener(doc: vscode.TextDocument): void {
+        // Only track source code files and avoid duplicating listeners
+        if (isSourceCodeFile(doc.fileName) && !this.documentChangeListeners.has(doc.fileName)) {
+            const disposable = vscode.workspace.onDidChangeTextDocument((event) => {
+                if (event.document.uri.toString() === doc.uri.toString()) {
+                    this.trackManualTextChanges(event)
+                }
+            })
 
-		return codeExtensions.some((ext) => fileName.endsWith(ext))
-	}
+            this.documentChangeListeners.set(doc.fileName, disposable)
+            this.disposables.push(disposable)
+        }
+    }
 
-	/**
-	 * Track manual text changes in a document
-	 */
-	private trackManualTextChanges(event: vscode.TextDocumentChangeEvent): void {
-		// Skip tracking if changes are being applied by AI
-		if (this.isApplyingAIDiff) {
-			return
-		}
+    /**
+     * Cleanup stale document snapshots to prevent memory bloat
+     */
+    private cleanupStaleSnapshots(): void {
+        try {
+            const openDocumentUris = new Set(
+                vscode.workspace.textDocuments.map(doc => doc.uri.toString())
+            );
+            
+            // Find and delete stale snapshots
+            const removedCount = this.documentSnapshotManager.cleanupStaleSnapshots(openDocumentUris);
+            
+            if (removedCount > 0) {
+                console.log(`Cleaned up ${removedCount} stale document snapshots`);
+            }
+        } catch (error) {
+            console.error("Error during document snapshot cleanup:", error);
+        }
+    }
 
-		const documentUri = event.document.uri.toString()
+    /**
+     * Track manual text changes in a document
+     */
+    private trackManualTextChanges(event: vscode.TextDocumentChangeEvent): void {
+        // Skip tracking if changes are being applied by AI
+        if (this.isApplyingAIDiff) {
+            return
+        }
 
-		// Clear any existing debounce timer for this document
-		if (this.debounceTimers.has(documentUri)) {
-			clearTimeout(this.debounceTimers.get(documentUri))
-		}
+        const documentUri = event.document.uri.toString()
 
-		// Set a new debounce timer
-		this.debounceTimers.set(
-			documentUri,
-			setTimeout(() => {
-				this.processDocumentChanges(event)
-				this.debounceTimers.delete(documentUri)
-			}, this.DEBOUNCE_DELAY),
-		)
-	}
+        // Clear any existing debounce timer for this document
+        if (this.debounceTimers.has(documentUri)) {
+            clearTimeout(this.debounceTimers.get(documentUri))
+        }
 
-	/**
-	 * Process document changes after debounce
-	 */
-	private processDocumentChanges(event: vscode.TextDocumentChangeEvent): void {
-		let linesAdded = 0
-		let linesDeleted = 0
-		const documentUri = event.document.uri.toString()
+        // Set a new debounce timer
+        this.debounceTimers.set(
+            documentUri,
+            setTimeout(() => {
+                this.processDocumentChanges(event)
+                this.debounceTimers.delete(documentUri)
+            }, this.DEBOUNCE_DELAY),
+        )
+    }
 
-		// Process each change in the document
-		for (const change of event.contentChanges) {
-			const oldLines = change.rangeLength > 0 ? event.document.getText(change.range).split("\n").length : 0
+    /**
+     * Process document changes after debounce
+     */
+    private processDocumentChanges(event: vscode.TextDocumentChangeEvent): void {
+        const documentUri = event.document.uri.toString()
+        const newContent = event.document.getText()
+        const oldContent = this.documentSnapshotManager.getSnapshot(documentUri) || ""
 
-			const newLines = change.text.split("\n").length
+        // Use the improved diffing mechanism for accuracy
+        const { additions, deletions } = getDiffChanges(oldContent, newContent)
+        
+        // Update the document snapshot with the new content
+        this.documentSnapshotManager.updateSnapshot(documentUri, newContent)
 
-			linesAdded += Math.max(0, newLines - oldLines)
-			linesDeleted += Math.max(0, oldLines - newLines)
-		}
+        // Only update metrics if there were actual changes
+        if (additions === 0 && deletions === 0) {
+            return
+        }
 
-		// Update metrics if there were actual changes
-		if (linesAdded > 0 || linesDeleted > 0) {
-			// Track this file as modified if not already in the set
-			const isNewlyModified = !this.modifiedFilesSet.has(documentUri)
-			if (isNewlyModified) {
-				this.modifiedFilesSet.add(documentUri)
-			}
+        // Track this file as modified if not already in the set
+        const isNewlyModified = !this.modifiedFilesSet.has(documentUri)
+        if (isNewlyModified) {
+            this.modifiedFilesSet.add(documentUri)
+        }
 
-			this.updateMetrics(CodeChangeSource.MANUAL, {
-				linesAdded,
-				linesDeleted,
-				filesModified: isNewlyModified ? 1 : 0,
-				filesCreated: 0,
-				lastUpdated: Date.now(),
-			})
-		}
-	}
+        this.updateMetrics(CodeChangeSource.MANUAL, {
+            linesAdded: additions,
+            linesDeleted: deletions,
+            filesModified: isNewlyModified ? 1 : 0,
+            filesCreated: 0,
+            lastUpdated: Date.now(),
+        });
+        
+        // Send telemetry event for consistency with AI-generated metrics
+        telemetryService.captureEvent("code_changes", {
+            source: CodeChangeSource.MANUAL,
+            linesAdded: additions,
+            linesDeleted: deletions,
+            isNewFile: false,
+            fileExtension: event.document.fileName.split(".").pop() || "",
+            isModification: true
+        })
+        
+        this.recordHistoricalSnapshot()
+    }
 
-	/**
-	 * Track AI code changes from applying diffs
-	 */
-	public trackAIDiffChanges(originalContent: string, newContent: string, filePath: string, isNewFile: boolean): void {
-		// Set flag to prevent manual tracking of these changes
-		this.isApplyingAIDiff = true
-		const fileUri = vscode.Uri.file(filePath).toString()
+    /**
+     * Track AI code changes from applying diffs
+     */
+    public async trackAIDiffChanges(
+        originalContent: string, 
+        newContent: string, 
+        filePath: string, 
+        isNewFile: boolean
+    ): Promise<void> {
+        // Set flag to prevent manual tracking of these changes
+        this.isApplyingAIDiff = true
+        
+        // Ensure filePath is valid
+        if (!filePath) return;
 
-		const { additions, deletions } = getDiffChanges(originalContent, newContent)
+        const fileUri = vscode.Uri.file(filePath).toString()
 
-		// Track this file as modified if not already in the set
-		const isNewlyModified = !isNewFile && !this.modifiedFilesSet.has(fileUri)
-		if (isNewlyModified || isNewFile) {
-			this.modifiedFilesSet.add(fileUri)
-		}
+        // Store the new content as a snapshot
+        this.documentSnapshotManager.updateSnapshot(fileUri, newContent)
 
-		this.updateMetrics(CodeChangeSource.AI_GENERATED, {
-			linesAdded: additions,
-			linesDeleted: deletions,
-			filesModified: isNewlyModified ? 1 : 0,
-			filesCreated: isNewFile ? 1 : 0,
-			lastUpdated: Date.now(),
-		})
+        // Use the improved diffing mechanism
+        const { additions, deletions } = getDiffChanges(originalContent, newContent)
 
-		// Send telemetry event
-		telemetryService.captureEvent("code_changes", {
-			source: CodeChangeSource.AI_GENERATED,
-			linesAdded: additions,
-			linesDeleted: deletions,
-			isNewFile: isNewFile,
-			fileExtension: filePath.split(".").pop(),
-		})
+        // Track this file as modified if not already in the set
+        const isNewlyModified = !isNewFile && !this.modifiedFilesSet.has(fileUri)
+        if (isNewlyModified || isNewFile) {
+            this.modifiedFilesSet.add(fileUri)
+        }
 
-		// Reset flag after a short delay to ensure all document change events have been processed
-		setTimeout(() => {
-			this.isApplyingAIDiff = false
-		}, 100)
-	}
+        await this.updateMetrics(CodeChangeSource.AI_GENERATED, {
+            linesAdded: additions,
+            linesDeleted: deletions,
+            filesModified: isNewlyModified ? 1 : 0,
+            filesCreated: isNewFile ? 1 : 0,
+            lastUpdated: Date.now(),
+        })
 
-	/**
-	 * Track manual file creation
-	 */
-	private trackManualFileCreation(count: number): void {
-		this.updateMetrics(CodeChangeSource.MANUAL, {
-			linesAdded: 0,
-			linesDeleted: 0,
-			filesModified: 0,
-			filesCreated: count,
-			lastUpdated: Date.now(),
-		})
-	}
+        // Get file extension safely
+        const filePathParts = filePath.split(".")
+        const fileExtension = filePathParts.length > 1 ? filePathParts.pop() : "";
 
-	/**
-	 * Update metrics and save to global state
-	 */
-	private async updateMetrics(source: CodeChangeSource, changes: Partial<CodeMetrics>): Promise<void> {
-		const target = source === CodeChangeSource.AI_GENERATED ? this.metrics.aiGenerated : this.metrics.manual
+        // Send telemetry event
+        try {
+            telemetryService.captureEvent("code_changes", {
+                source: CodeChangeSource.AI_GENERATED,
+                linesAdded: additions,
+                linesDeleted: deletions,
+                isNewFile: isNewFile,
+                fileExtension,
+                isModification: !isNewFile
+            })
+        } catch (error) {
+            console.error("Error sending telemetry for AI changes:", error);
+        }
+        
+        try {
+            await this.recordHistoricalSnapshot();
+        } catch (error) {
+            console.error("Error recording historical snapshot for AI changes:", error);
+        }
 
-		// Update metrics
-		target.linesAdded += changes.linesAdded || 0
-		target.linesDeleted += changes.linesDeleted || 0
-		target.filesModified += changes.filesModified || 0
-		target.filesCreated += changes.filesCreated || 0
-		target.lastUpdated = changes.lastUpdated || Date.now()
+        // Reset flag after a short delay to ensure all document change events have been processed
+        setTimeout(() => {
+            this.isApplyingAIDiff = false
+        }, this.AI_FLAG_RESET_DELAY)
+    }
 
-		// Save updated metrics
-		await this.saveMetrics()
-	}
+    /**
+     * Track manual file creation
+     */
+    private async trackManualFileCreation(count: number): Promise<void> {
+        if (count <= 0) return;
+        
+        await this.updateMetrics(CodeChangeSource.MANUAL, {
+            linesAdded: 0,
+            linesDeleted: 0,
+            filesModified: 0,
+            filesCreated: count,
+            lastUpdated: Date.now(),
+        })
+        
+        try {
+            await this.recordHistoricalSnapshot();
+        } catch (error) {
+            console.error("Error recording historical snapshot for file creation:", error);
+        }
+        
+        // Send telemetry event for consistency with AI-generated
+        telemetryService.captureEvent("code_changes", {
+            source: CodeChangeSource.MANUAL,
+            linesAdded: 0,
+            linesDeleted: 0,
+            filesCreated: count,
+            fileExtension: "multiple"
+        });
+    }
+    
+    /**
+     * Track manual file deletion
+     */
+    private async trackManualFileDeletion(files: readonly vscode.Uri[]): Promise<void> {
+        // Only count source code files
+        const sourceCodeFiles = files.filter(file => 
+            isSourceCodeFile(file.fsPath)
+        );
+        
+        if (sourceCodeFiles.length === 0) return;
+        
+        // Count deleted source code files
+        const deletedCount = sourceCodeFiles.length;
+        
+        // Remove from modified files set and document snapshots
+        sourceCodeFiles.forEach(file => {
+            const fileUri = file.toString();
+            this.modifiedFilesSet.delete(fileUri);
+            this.documentSnapshotManager.deleteSnapshot(fileUri);
+        });
+        
+        await this.updateMetrics(CodeChangeSource.MANUAL, {
+            linesAdded: 0,
+            linesDeleted: 0,
+            filesModified: -deletedCount, // Decrement modified files count
+            filesCreated: 0,
+            lastUpdated: Date.now(),
+        });
+        
+        try {
+            await this.recordHistoricalSnapshot();
+        } catch (error) {
+            console.error("Error recording historical snapshot for file deletion:", error);
+        }
+    }
 
-	/**
-	 * Save metrics to global state
-	 */
-	private async saveMetrics(): Promise<void> {
-		await this.context.globalState.update("codeMetrics", this.metrics)
-	}
+    /**
+     * Update metrics and save to global state
+     */
+    private async updateMetrics(source: CodeChangeSource, changes: Partial<CodeMetrics>): Promise<void> {
+        const target = source === CodeChangeSource.AI_GENERATED ? this.metrics.aiGenerated : this.metrics.manual
+        
+        try {
+            // Update metrics
+            target.linesAdded += changes.linesAdded || 0
+            target.linesDeleted += changes.linesDeleted || 0
+            target.filesModified += changes.filesModified || 0
+            target.filesCreated += changes.filesCreated || 0
+            target.lastUpdated = changes.lastUpdated || Date.now()
 
-	/**
-	 * Get current metrics
-	 */
-	public getMetrics(): MetricsData {
-		return { ...this.metrics }
-	}
+            // Save updated metrics
+            await this.saveMetrics()
+        } catch (error) {
+            console.error(`Failed to update metrics for ${source}:`, error)
+        }
+    }
 
-	/**
-	 * Reset metrics
-	 */
-	public async resetMetrics(): Promise<void> {
-		this.metrics = { ...defaultMetricsData }
-		this.modifiedFilesSet.clear()
-		await this.saveMetrics()
-	}
+    /**
+     * Record a historical snapshot of current metrics
+     */
+    private async recordHistoricalSnapshot(): Promise<void> {
+        const now = Date.now()
+        const lastSnapshot = this.metrics.history[this.metrics.history.length - 1]
+        
+        // Only record a new snapshot if it's been at least 1 hour since the last one
+        // or if this is the first snapshot
+        if (!lastSnapshot || (now - lastSnapshot.timestamp) >= 60 * 60 * 1000) {
+            try {
+                // Create a deep copy of current metrics
+                const snapshot: HistoricalMetrics = {
+                    timestamp: now,
+                    aiGenerated: { ...this.metrics.aiGenerated },
+                    manual: { ...this.metrics.manual }
+                }
+                
+                // Add to history and limit size
+                this.metrics.history.push(snapshot)
+                if (this.metrics.history.length > this.MAX_HISTORY_ENTRIES) {
+                    this.metrics.history.shift() // Remove oldest entry
+                }
+                
+                // Save metrics after recording a snapshot
+                await this.saveMetrics()
+            } catch (err) {
+                console.error("Failed to save metrics snapshot:", err)
+                throw err; // Re-throw for proper handling upstream
+            }
+        }
+    }
 
-	/**
-	 * Clean up resources
-	 */
-	public dispose(): void {
-		this.disposables.forEach((d) => d.dispose())
-		this.disposables = []
+    /**
+     * Save metrics to global state
+     */
+    private async saveMetrics(): Promise<void> {
+        try {
+            await this.context.globalState.update("codeMetrics", this.metrics)
+        } catch (error) {
+            console.error("Failed to save metrics to global state:", error)
+            throw error; // Re-throw for proper handling upstream
+        }
+    }
 
-		// Clear document change listeners
-		this.documentChangeListeners.forEach((d) => d.dispose())
-		this.documentChangeListeners.clear()
+    /**
+     * Get current metrics
+     */
+    public getMetrics(): MetricsData {
+        // Create a proper deep copy to avoid reference issues
+        return {
+            aiGenerated: this.deepCopyMetrics(this.metrics.aiGenerated),
+            manual: this.deepCopyMetrics(this.metrics.manual)
+        }
+    }
 
-		// Clear debounce timers
-		this.debounceTimers.forEach((timer) => clearTimeout(timer))
-		this.debounceTimers.clear()
-	}
+    /**
+     * Create a deep copy of metrics object
+     */
+    private deepCopyMetrics(metrics: CodeMetrics): CodeMetrics {
+        return {
+            linesAdded: metrics.linesAdded,
+            linesDeleted: metrics.linesDeleted,
+            filesModified: metrics.filesModified,
+            filesCreated: metrics.filesCreated,
+            lastUpdated: metrics.lastUpdated
+        };
+    }
+
+    /**
+     * Create a deep copy of historical metrics
+     */
+    private deepCopyHistoricalMetrics(metrics: HistoricalMetrics): HistoricalMetrics {
+        return {
+            timestamp: metrics.timestamp,
+            aiGenerated: this.deepCopyMetrics(metrics.aiGenerated),
+            manual: this.deepCopyMetrics(metrics.manual)
+        };
+    }
+
+    /**
+     * Get metrics with history
+     */
+    public getMetricsWithHistory(): MetricsDataWithHistory {
+        // Deep copy the entire metrics object with history
+        return {
+            aiGenerated: this.deepCopyMetrics(this.metrics.aiGenerated),
+            manual: this.deepCopyMetrics(this.metrics.manual),
+            history: this.metrics.history.map(item => this.deepCopyHistoricalMetrics(item))
+        };
+    }
+
+    /**
+     * Reset metrics
+     */
+    public async resetMetrics(): Promise<void> {
+        try {
+            // Make a clean copy of the default metrics
+            this.metrics = {
+                aiGenerated: { ...emptyMetrics },
+                manual: { ...emptyMetrics },
+                history: []
+            };
+
+            // Record initial empty snapshot and cleanup tracking sets
+            await this.recordHistoricalSnapshot();
+            this.modifiedFilesSet.clear();
+            this.documentSnapshotManager.clear();
+            
+            // Send a telemetry event for metrics reset
+            telemetryService.captureEvent("metrics_reset", {});
+            
+            await this.saveMetrics();
+        } catch (error) {
+            console.error("Error resetting metrics:", error);
+        }
+    }
+
+    /**
+     * Clean up resources
+     */
+    public dispose(): void {
+        this.disposables.forEach((d) => d.dispose())
+        this.disposables = []
+
+        // Clear document change listeners
+        this.documentChangeListeners.forEach((d) => d.dispose())
+        this.documentChangeListeners.clear()
+
+        // Clear debounce timers
+        this.debounceTimers.forEach((timer) => clearTimeout(timer))
+        this.debounceTimers.clear()
+    }
 }
+
+// Re-export the types from types.ts for external users
+export { CodeChangeSource } from "./types"
+export type { 
+    CodeMetrics,
+    HistoricalMetrics,
+    MetricsData,
+    MetricsDataWithHistory
+} from "./types"

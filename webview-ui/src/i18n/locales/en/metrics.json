@@ -9,6 +9,7 @@
 	"aiGenerated": "AI Generated",
 	"manual": "Manual",
 	"comparison": "Comparison",
+	"trends": "Trends",
 	"linesAdded": "Lines Added",
 	"linesDeleted": "Lines Deleted",
 	"filesModified": "Files Modified",
@@ -21,5 +22,12 @@
 	"totalManualLines": "Total Manual Line Changes",
 	"totalAIFiles": "Total AI File Changes",
 	"totalManualFiles": "Total Manual File Changes",
-	"lastUpdated": "Last Updated"
+	"lastUpdated": "Last Updated",
+	"historicalData": "Historical Data",
+	"noHistoricalData": "No historical data available yet. Data is collected hourly as you work.",
+	"dailyActivity": "Daily Activity",
+	"weeklyTrends": "Weekly Trends",
+	"codeGrowthOverTime": "Code Growth Over Time",
+	"productivityTrends": "Productivity Trends",
+	"timeRange": "Time Range"
 }
